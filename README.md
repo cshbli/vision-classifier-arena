@@ -32,6 +32,18 @@ Use **official splits** when available. Match each backbone’s expected preproc
 
 **Why include it:** ResNet (2015) is a classic baseline, but ConvNeXt modernized CNN architectures using design choices borrowed from Vision Transformers (7×7 depthwise convolutions, inverted bottlenecks, LayerNorm).
 
+ConvNeXt comes in multiple capacity variants (same block design; different width/depth). This arena defaults to **ConvNeXt-Base**.
+
+| Variant | Params | Disk size (`.pth`) |
+|---------|--------|--------------------|
+| **Tiny (T)** | ~29M | ~109 MB |
+| **Small (S)** | ~50M | ~192 MB |
+| **Base (B)** | ~89M | ~338 MB |
+| **Large (L)** | ~198M | ~755 MB |
+| **XLarge (XL)** | ~350M | ~1.3 GB |
+
+T–L disk sizes are torchvision ImageNet-1K checkpoints; XL is estimated from ~4 bytes × params (not in torchvision).
+
 **Small-data impact:** ConvNeXt often outperforms ViTs on small custom datasets because its strong inductive bias prevents overfitting better than a standard ViT.
 
 **LoRA on ConvNeXt:** LoRA is often thought of as “Transformers only” because the original method targets dense / Linear weights (especially attention). It is **not** limited to Transformers: low-rank updates apply wherever there are suitable weight matrices. **1×1 convolutions** behave like linear layers over channels, so classic LoRA fits naturally; larger kernels may use Conv-LoRA-style factorizations. **ConvNeXt** is a modern CNN with Transformer-inspired blocks, so PEFT/LoRA is much more natural here than on older CNN designs — which is why this arena lists **Full / LoRA** for ConvNeXt alongside ViT/Swin.
