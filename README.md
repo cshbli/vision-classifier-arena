@@ -258,6 +258,122 @@ Train loss **1.21 → ~0.09** by early stop. Best epoch also had the **lowest va
 
 **Vs full FT:** LoRA matches full FT on the arena’s primary metric (**test bacc 0.865 vs 0.868**, −0.3 pt) with **~60× fewer trainable params** and **~2.6× less wall-clock**. Overall acc (−2.5 pt) and macro-F1 (−4.9 pt) lag — full FT still better when you care about precision on rare classes, not only per-class recall. Prefer `best.pt` (epoch 9). On this medium-sized medical set, LoRA is the better **accuracy-per-compute** default; full FT remains the ceiling for macro-F1.
 
+## Self-supervised ViT — DINOv2 / DINOv3 (linear probe / MLP)
+
+**Why include it:** DINOv2/DINOv3 are self-supervised ViTs trained to produce strong general visual features **without** ImageNet class labels. On small / domain-shifted data, a **frozen** DINO backbone + tiny head often beats full fine-tuning a supervised CNN, because you keep the pretrained representation instead of overfitting it.
+
+**Protocol:** freeze the backbone → extract the **CLS** token → train only a head with CE (+ class weights), early stop on val balanced accuracy. Same DermaMNIST@224 splits and ImageNet mean/std as the CNN runs.
+
+| Head | What it is | When to use |
+|------|------------|-------------|
+| **Linear probe** | One `Linear(D → C)` on CLS | **Start here** — standard DINO eval; tests linear separability of features |
+| **MLP head** | Small MLP (e.g. Linear → GELU → Dropout → Linear) | Second run if linear plateaus; slightly more capacity, slightly more overfit risk |
+
+Both keep DINO frozen. They differ only in head capacity — not in backbone training.
+
+**DINOv2 linear probe (no license gate)** — script: [`train_dinov2_linear_derma.py`](train_dinov2_linear_derma.py). Official weights via PyTorch Hub [`facebookresearch/dinov2`](https://github.com/facebookresearch/dinov2). Default: **`dinov2_vitb14`** (ViT-B/14, ~86M) so it matches ConvNeXt-Base / the planned DINOv3-B slot. DINOv2 uses **patch 14** (vs DINOv3’s 16); 224×224 is still the usual input. No Hugging Face login.
+
+```bash
+conda activate torch
+python train_dinov2_linear_derma.py --data dermamnist_224 --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--hub-model` | `dinov2_vitb14` | Also `dinov2_vits14`, `dinov2_vitl14`, `dinov2_vitg14` |
+| `--out` | `runs/dinov2_linear_derma` | Writes `best.pt` + `history.json` |
+| `--lr` | `1e-3` | Head only (backbone frozen) |
+
+First run clones the Hub repo and downloads weights into `~/.cache/torch/hub/`. Same CE / class weights / early-stop-on-bacc protocol as ConvNeXt. Keep DINOv3 below for when Meta/HF access is approved.
+
+**DINOv3 linear probe** — script: [`train_dinov3_linear_derma.py`](train_dinov3_linear_derma.py). Default backbone: [`facebook/dinov3-vitb16-pretrain-lvd1689m`](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m) (ViT-B/16). Needs Hugging Face Transformers (not in the base `torch` env until you install it):
+
+DINOv3 weights on Hugging Face are **gated**. A bare `from_pretrained` without login fails with `401` / `GatedRepoError`. One-time setup:
+
+1. Create / log in at [huggingface.co](https://huggingface.co/)
+2. Open [`facebook/dinov3-vitb16-pretrain-lvd1689m`](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m) → **Agree** to the Meta license / access conditions
+3. Create an access token: [Settings → Access Tokens](https://huggingface.co/settings/tokens) (read is enough)
+4. Authenticate in the `torch` env:
+
+```bash
+conda activate torch
+pip install "transformers>=4.56" huggingface_hub
+hf auth login   # paste the token (huggingface-cli login is deprecated)
+# or: export HF_TOKEN=hf_...
+python train_dinov3_linear_derma.py --data dermamnist_224 --epochs 40 --batch-size 32 --eval-test
+```
+
+If you already agreed on the website but still see `401`, you are not logged in locally — re-run `hf auth login`.
+
+`403` / “not in the authorized list” means the token **is** valid, but **this HF account has not been granted the gated repo**. Login cannot skip that. Open the model page **while logged into the same account as the token**, click **Agree and access repository** (or submit the access form), wait until the page says you have access, then rerun the script. Approval is often instant; if Meta reviews it, wait until the repo lists you as authorized.
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--model-id` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Try `…/dinov3-vits16-pretrain-lvd1689m` for a smaller/faster backbone |
+| `--out` | `runs/dinov3_linear_derma` | Writes `best.pt` + `history.json` |
+| `--lr` | `1e-3` | Head only (backbone frozen) |
+| `--image-size` | `224` | Matches HF processor default for these checkpoints |
+
+**Why this checkpoint:** Meta’s official open DINOv3 release has **12** backbones ([MODEL_CARD](https://github.com/facebookresearch/dinov3/blob/main/MODEL_CARD.md)). We default to **ViT-B/16 @ LVD-1689M** (~86M) so it lines up with the arena’s **ConvNeXt-Base (~89M)** mid-size slot — strong enough for a fair SSL vs supervised CNN comparison, still easy to run frozen + linear probe. **LVD** is web/natural-image pretraining (right domain for DermaMNIST); **SAT-493M** is satellite and would be the wrong domain here.
+
+| Family | Pretrain data | Open models |
+|--------|---------------|-------------|
+| **ViT** | LVD-1689M (web) | S/16 (21M), S+/16 (29M), **B/16 (86M)** ← default, L/16 (300M), H+/16 (840M), 7B/16 (~6.7B) |
+| **ConvNeXt** | LVD-1689M | T (29M), S (50M), B (89M), L (198M) |
+| **ViT** | SAT-493M (satellite) | L/16 (300M), 7B/16 (~6.7B) |
+
+HF ids look like `facebook/dinov3-vitb16-pretrain-lvd1689m`, `…-vits16-…`, `…-convnext-base-…`, `…-vitl16-pretrain-sat493m`. For DermaMNIST stick to **LVD ViT** (or LVD ConvNeXt if you want a DINO-distilled CNN). Backbone weights cache under `~/.cache/huggingface/hub/` after the first download.
+
+### Run analysis — `dinov3_linear_derma`
+
+Command: `--epochs 40 --batch-size 32 --eval-test` (`facebook/dinov3-vitb16-pretrain-lvd1689m`). Early stop at epoch **35**; best val balanced accuracy at epoch **25** (~8.0 min). Checkpoint: `runs/dinov3_linear_derma/best.pt`. Trainable **5,383 / 85.7M (0.0063%)** — head only.
+
+| Split | Acc | Balanced acc | Macro-F1 |
+|-------|----:|-------------:|---------:|
+| Val (best, epoch 25) | 0.771 | **0.782** | 0.677 |
+| Test | 0.780 | **0.781** | 0.694 |
+
+Train loss **1.31 → ~0.45**. Val CE fell steadily through ~epoch 19, then plateaued (~0.62). Val bacc climbed to **0.782** at epoch 25 with the usual noise under class imbalance (acc and bacc often disagree). Val and test bacc are essentially identical — the linear head did not overfit the 1k val set.
+
+| Method | Trainable | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
+| ResNet50 full FT | ~26M | ~42 min | 27 | 0.827 | 0.881 | 0.792 | 0.794 |
+| ConvNeXt-Base full FT | ~88M | ~26 min | 24 | 0.861 | **0.895** | **0.868** | **0.840** |
+| ConvNeXt-Base LoRA | 1.45M | ~10 min | 9 | 0.855 | 0.870 | 0.865 | 0.791 |
+| DINOv3-B linear probe | 5.4k | ~8 min | 25 | 0.782 | 0.780 | 0.781 | 0.694 |
+| **DINOv3-B MLP head** | **397k** | **~9 min** | **32** | **0.820** | 0.858 | **0.805** | **0.779** |
+
+**Takeaways:** Frozen DINOv3 + linear is a clean, cheap SSL baseline, but on DermaMNIST it **lags ConvNeXt full FT / LoRA by ~8–9 pt test bacc** and ~10–15 pt macro-F1. That is expected: a single linear layer cannot adapt web/LVD features to dermatoscopy the way full/LoRA FT can. Prefer `best.pt` (epoch 25).
+
+**DINOv3 MLP head** — script: [`train_dinov3_mlp_derma.py`](train_dinov3_mlp_derma.py). Same frozen backbone and data protocol; head is `Linear(D→H) → GELU → Dropout → Linear(H→C)` (default `H=512`, dropout `0.2`). Uses the cached HF weights (no re-download if linear already ran). Compare against linear test **bacc 0.781**.
+
+```bash
+conda activate torch
+python train_dinov3_mlp_derma.py --data dermamnist_224 --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--out` | `runs/dinov3_mlp_derma` | Writes `best.pt` + `history.json` |
+| `--mlp-hidden` | `512` | Hidden width of the MLP |
+| `--dropout` | `0.2` | After GELU |
+| `--lr` | `1e-3` | Head only |
+
+### Run analysis — `dinov3_mlp_derma`
+
+Command: `--epochs 40 --batch-size 32 --eval-test` (`mlp_hidden=512`, `dropout=0.2`). Ran all **40** epochs (no early stop); best val balanced accuracy at epoch **32** (~9.1 min). Checkpoint: `runs/dinov3_mlp_derma/best.pt`. Trainable **397k / 86.1M (0.46%)**.
+
+| Split | Acc | Balanced acc | Macro-F1 |
+|-------|----:|-------------:|---------:|
+| Val (best, epoch 32) | 0.855 | **0.820** | 0.784 |
+| Test | 0.858 | **0.805** | 0.779 |
+
+Train loss **1.18 → ~0.12**. Val CE bottomed mid-run (~0.62) then rose while train loss kept falling — mild head overfit; bacc still peaked at epoch 32. Val→test bacc drop is small (**−1.5 pt**).
+
+**Vs linear probe (same backbone):** MLP gains **+2.4 pt test bacc** (0.805 vs 0.781), **+7.8 pt test acc**, and **+8.5 pt macro-F1** (0.779 vs 0.694). Nonlinearity helps rare-class precision/recall, not only overall accuracy. Prefer `best.pt` (epoch 32), not epoch 40.
+
+**Vs ConvNeXt:** Still **~6 pt behind** LoRA/full FT on test bacc (0.805 vs ~0.87). Frozen DINOv3 + MLP is a stronger SSL head than linear, but does not replace domain adaptation of the backbone. Next: DINOv2 linear/MLP, or light DINO LoRA if you want to close the CNN gap.
+
 ## B. Zero-shot & linear probe CLIP (multimodal models)
 
 **Why include it:** Models like CLIP (OpenAI / OpenCLIP) or EVA-CLIP are pre-trained on billions of image–text pairs.
