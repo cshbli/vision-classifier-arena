@@ -8,7 +8,7 @@ A benchmark suite comparing image classification performance across small, custo
 | Modern CNN | ConvNeXt-Base | Full / LoRA Fine-Tuning | High accuracy; inductive bias resists overfitting vs standard ViT. |
 | Self-Supervised ViT | DINOv2 / DINOv3 | Linear Probe / MLP Head | No backbone tuning; preserves global features. |
 | Supervised ViT | ViT-B/16 | Full vs. **LoRA** Fine-Tuning | High ceiling; full FT overfits easily — LoRA helps a lot. |
-| Hierarchical ViT | Swin-T / Swin-B | Full / LoRA Fine-Tuning | CNN–Transformer hybrid; more data-efficient than plain ViT. |
+| Hierarchical ViT | **Swin-B** (Swin-T optional) | Full / LoRA Fine-Tuning | CNN–Transformer hybrid; more data-efficient than plain ViT. |
 | Multimodal | CLIP / OpenCLIP / EVA-CLIP | **Zero-shot** vs. Linear Probe | Zero training images (zero-shot); linear probe is a strong small-data SOTA with low compute. |
 | PEFT (strategy) | LoRA on ViT / Swin / ConvNeXt | Train ~1% of params | Higher accuracy + faster training than full FT on small samples. |
 
@@ -441,6 +441,51 @@ Train loss **1.18 → ~0.01**. Val CE bottomed ~epoch **8** (0.529), then rose w
 
 **Vs ConvNeXt:** Within **~1 pt test bacc** of ConvNeXt LoRA (0.859 vs 0.865) and close to ConvNeXt full FT (0.868). On DermaMNIST, **ViT + LoRA** is the right supervised-Transformer recipe; full FT is the weak baseline the arena predicted.
 
+## Hierarchical ViT — Swin-B (full fine-tune)
+
+**Why include it:** Standard ViT uses non-overlapping square patches at a **single scale**. **Swin** uses shifted-window attention and a hierarchical feature pyramid (patch merging across stages), so it behaves more like a CNN–Transformer hybrid — often more data-efficient than plain ViT on small / domain data.
+
+**Why Swin-B (not Swin-T):** Arena mid-size slot is ~86–89M (ConvNeXt-Base, ViT-B/16, DINOv3-B). Torchvision **Swin-B** is ~88M; **Swin-T** is ~28M (Tiny class). Use **Swin-B** for fair comparison; Swin-T only as a cheaper ablation later.
+
+**Full fine-tune on DermaMNIST:** Same protocol as ConvNeXt / ViT — torchvision `swin_b` + `IMAGENET1K_V1`, differential LRs, class weights, early stop on val balanced accuracy. Classifier head is `model.head` (`Linear(1024 → num_classes)`). Script: [`train_swin_b_derma.py`](train_swin_b_derma.py).
+
+```bash
+conda activate torch
+python train_swin_b_derma.py --data dermamnist_224 --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--out` | `runs/swin_b_derma` | Writes `best.pt` + `history.json` |
+| `--lr-backbone` / `--lr-head` | `1e-4` / `1e-3` | Head = `head.*` |
+| `--batch-size` | `32` | Drop to `16` if GPU OOM |
+
+### Run analysis — `swin_b_derma`
+
+Command: `--epochs 40 --batch-size 32 --eval-test`. Early stop at epoch **23**; best val balanced accuracy at epoch **13** (~12.8 min). Checkpoint: `runs/swin_b_derma/best.pt`. Model **86.8M** params (full FT).
+
+| Split | Acc | Balanced acc | Macro-F1 |
+|-------|----:|-------------:|---------:|
+| Val (best, epoch 13) | 0.823 | **0.845** | 0.761 |
+| Test | 0.830 | **0.859** | 0.776 |
+
+Train loss **1.32 → ~0.08**. Val CE bottomed ~epoch **11** (0.478), then rose to **~0.91** by epoch 23 while train loss kept falling — mild overfit, but early stop + bacc checkpointing cut the run short (unlike ViT full FT, which ran to epoch 40). Test bacc is **above** val (+1.4 pt); with a 1k val set that is noise. Prefer `best.pt` (epoch 13).
+
+| Method | Trainable | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
+| ConvNeXt-Base full FT | ~88M | ~26 min | 24 | 0.861 | **0.895** | **0.868** | **0.840** |
+| ConvNeXt-Base LoRA | 1.45M | ~10 min | 9 | 0.855 | 0.870 | 0.865 | 0.791 |
+| **Swin-B full FT** | **~87M** | **~13 min** | **13** | **0.845** | 0.830 | **0.859** | 0.776 |
+| ViT-B/16 LoRA (MLP) | 0.74M | ~16 min | 21 | 0.838 | 0.881 | **0.859** | **0.849** |
+| DINOv3-B MLP (frozen) | 397k | ~9 min | 32 | 0.820 | 0.858 | 0.805 | 0.779 |
+| ViT-B/16 full FT | ~86M | ~22 min | 40 | 0.823 | 0.846 | 0.798 | 0.797 |
+
+**Vs ViT full FT:** Swin wins clearly — **+6.1 pt test bacc** (0.859 vs 0.798), earlier peak (epoch 13 vs 40), and **~1.7× faster**. Hierarchical / windowed bias helps on this small dermatology set where plain ViT overfits.
+
+**Vs ConvNeXt:** Within **~1 pt test bacc** of ConvNeXt full FT (0.859 vs 0.868) and on par with ConvNeXt LoRA (0.865). Acc and macro-F1 lag ConvNeXt more (**−6.5 pt** acc, **−6.4 pt** F1 vs ConvNeXt full) — Swin’s bacc is strong (rare classes), but overall precision/recall balance is weaker. Still the best **supervised Transformer full FT** so far.
+
+**Vs ViT LoRA:** Same test bacc (**0.859**); ViT LoRA has higher acc/F1 with far fewer trainable params. Next natural step: **Swin-B LoRA** to see if PEFT matches or beats this full-FT result with less overfit.
+
 ## B. Zero-shot & linear probe CLIP (multimodal models)
 
 **Why include it:** Models like CLIP (OpenAI / OpenCLIP) or EVA-CLIP are pre-trained on billions of image–text pairs.
@@ -452,9 +497,3 @@ Train loss **1.18 → ~0.01**. Val CE bottomed ~epoch **8** (0.529), then rose w
 **Why include it:** Full fine-tuning of ViTs on small datasets often leads to severe overfitting.
 
 **Small-data impact:** Applying LoRA (Low-Rank Adaptation) to frozen ViT/Swin (and similarly **ConvNeXt**) backbones fine-tunes only ~1% of parameters, usually yielding higher accuracy and faster training on small sample sizes. See also [LoRA on ConvNeXt](#a-modern-cnn-convnext).
-
-## D. Hierarchical Vision Transformers (e.g. Swin Transformer)
-
-**Why include it:** Standard ViT uses non-overlapping square patches at a single scale. Swin Transformer uses shifted windows and hierarchical representations.
-
-**Small-data impact:** Swin behaves more like a hybrid between a CNN and a Transformer, making it significantly more data-efficient on small custom datasets.
