@@ -9,7 +9,7 @@ A benchmark suite comparing image classification performance across small, custo
 | Self-Supervised ViT | DINOv2 / DINOv3 | Linear Probe / MLP Head | No backbone tuning; preserves global features. |
 | Supervised ViT | ViT-B/16 | Full vs. **LoRA** Fine-Tuning | High ceiling; full FT overfits easily — LoRA helps a lot. |
 | Hierarchical ViT | **Swin-B** (Swin-T optional) | Full / LoRA Fine-Tuning | CNN–Transformer hybrid; more data-efficient than plain ViT. |
-| Multimodal | CLIP / OpenCLIP / EVA-CLIP | **Zero-shot** vs. Linear Probe | Zero training images (zero-shot); linear probe is a strong small-data SOTA with low compute. |
+| Multimodal | **OpenCLIP ViT-B/16** (DataComp-XL) | **Zero-shot** vs. Linear Probe | Zero training images (zero-shot); linear probe is a strong small-data SOTA with low compute. |
 | PEFT (strategy) | LoRA on ViT / Swin / ConvNeXt | Train ~1% of params | Higher accuracy + faster training than full FT on small samples. |
 
 ## Datasets
@@ -529,9 +529,96 @@ Train loss **1.29 → ~0.08**. Val CE bottomed ~epoch **9** (0.500), still **0.5
 
 ## B. Zero-shot & linear probe CLIP (multimodal models)
 
-**Why include it:** Models like CLIP (OpenAI / OpenCLIP) or EVA-CLIP are pre-trained on billions of image–text pairs.
+**Why include it:** CLIP-style models are trained on image–text pairs (not ImageNet class labels). **Zero-shot** uses the text tower and needs **zero** training images; a **linear probe** on the frozen image encoder is the fair multimodal counterpart to DINOv3 linear (same protocol, tiny head only).
 
-**Small-data impact:** Zero-shot CLIP requires **zero** training images, while a CLIP image encoder paired with a **linear probe** often sets a strong benchmark for small datasets with minimal compute.
+**Why OpenCLIP ViT-B/16 DataComp-XL (not OpenAI CLIP or EVA-CLIP first):** Arena mid-size slot is ~86–89M (ConvNeXt-Base, ViT-B/16, DINOv3-B, Swin-B). A CLIP **B/16** image encoder matches that. Use **OpenCLIP** so one library can load OpenAI / LAION / DataComp / EVA later.
+
+| Family | Concrete pick | Vision size | Role |
+|--------|----------------|------------:|------|
+| OpenAI CLIP | `ViT-B-16` + `openai` | ~86M | Classic citation; weaker zero-shot |
+| **OpenCLIP (default)** | **`ViT-B-16` + `datacomp_xl_s13b_b90k`** | **~86M** | Capacity-matched; strongest common B/16 CLIP |
+| OpenCLIP (alt) | `ViT-B-16` + `laion2b_s34b_b88k` | ~86M | LAION-2B paper checkpoint |
+| EVA-CLIP | `EVA02-B-16` | ~86M | Stronger training recipe, different ViT; later ablation |
+| Skip for now | CLIP-L/14, EVA-L/E | 300M–1B+ | Breaks the Base comparison |
+
+Same **ViT-B/16** architecture; DataComp-XL public weights are stronger than original CLIP (ImageNet zero-shot ~**73.5%** vs OpenAI ~**68%** vs LAION-2B ~**70%**). Do **not** start with EVA-CLIP: EVA02-B is still Base-sized and often a bit stronger, but it is a different backbone, so a win vs ViT-B would mix “CLIP training” with “EVA architecture.” Use it as a follow-up, not the headline CLIP.
+
+**What to run on DermaMNIST:**
+1. **Zero-shot** — frozen image + text towers; prompts like `a dermoscopic photo of {class}` (no training images). Script: [`zeroshot_clip_derma.py`](zeroshot_clip_derma.py). Default: OpenCLIP **`ViT-B-16` + `datacomp_xl_s13b_b90k`**. Uses CLIP’s own preprocess (not ImageNet norms). Text side expands DermaMNIST abbreviations to MedMNIST names (`mel` → melanoma, etc.) and averages **4** dermoscopic templates. Needs `open_clip_torch` (not in the base `torch` env until you install it):
+
+```bash
+conda activate torch
+pip install open_clip_torch
+python zeroshot_clip_derma.py --data dermamnist_224 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--out` | `runs/clip_zeroshot_derma` | Writes `zeroshot.pt` + `history.json` |
+| `--arch` / `--pretrained` | `ViT-B-16` / `datacomp_xl_s13b_b90k` | Try `openai` or `laion2b_s34b_b88k` |
+| `--eval-test` | off | Also score the test split (recommended; no training) |
+
+First run downloads weights via Hugging Face Hub into `~/.cache/huggingface/` / OpenCLIP’s cache.
+
+### Run analysis — `clip_zeroshot_derma`
+
+Command: `--eval-test` (OpenCLIP `ViT-B-16` / `datacomp_xl_s13b_b90k`, 4 dermoscopic templates). No training; ~1.6 min including weight download. Classifier: `runs/clip_zeroshot_derma/zeroshot.pt` (text embeddings only). Reported **149.6M** is **image + text** towers (vision encoder is still ~86M).
+
+| Split | Acc | Balanced acc | Macro-F1 |
+|-------|----:|-------------:|---------:|
+| Val | 0.219 | **0.311** | 0.159 |
+| Test | 0.255 | **0.350** | 0.198 |
+
+Val and test match closely (no train → no overfit). Test bacc is **~2.4× chance** (1/7 ≈ 0.143) but **far below** a majority-class dummy on acc (nv dominates DermaMNIST, ~0.67). CLIP is not collapsing to “always nevus”; it just does not map dermoscopic pixels onto these clinical names.
+
+| Method | Trainable | Time | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|-----:|---------:|----------:|--------------:|
+| Swin-B LoRA | 1.01M | ~15 min | 0.872 | **0.872** | 0.835 |
+| ConvNeXt-Base full FT | ~88M | ~26 min | **0.895** | 0.868 | **0.840** |
+| DINOv3-B MLP (frozen) | 397k | ~9 min | 0.858 | 0.805 | 0.779 |
+| DINOv3-B linear | 5.4k | ~8 min | 0.780 | 0.781 | 0.694 |
+| **OpenCLIP B/16 zero-shot** | **0** | **~2 min** | 0.255 | **0.350** | 0.198 |
+
+**Takeaways:** Web CLIP **fails as a dermatoscope classifier** without labeled data — **−43 pt test bacc** vs frozen DINOv3 linear, **−52 pt** vs Swin LoRA. Expected: DataComp/LAION text is natural-image captions, not HAM10000 lesion types under dermoscopy. Prompt tweaks will not close that gap. The **image encoder** may still be useful; **linear probe** (below) is the fair CLIP-vs-DINO comparison.
+
+2. **Linear probe** — frozen CLIP **image** encoder + linear head; text tower unused. Same protocol as DINOv3 linear (inverse-freq CE, early stop on val bacc). Script: [`train_clip_linear_derma.py`](train_clip_linear_derma.py). Uses OpenCLIP train/eval preprocess (CLIP norms, not ImageNet). Checkpoint stores the **head only**.
+
+```bash
+conda activate torch
+python train_clip_linear_derma.py --data dermamnist_224 --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--out` | `runs/clip_linear_derma` | Writes `best.pt` + `history.json` |
+| `--arch` / `--pretrained` | `ViT-B-16` / `datacomp_xl_s13b_b90k` | Same as zero-shot |
+| `--lr` | `1e-3` | Head only (backbone frozen) |
+
+### Run analysis — `clip_linear_derma`
+
+Command: `--epochs 40 --batch-size 32 --eval-test` (OpenCLIP `ViT-B-16` / `datacomp_xl_s13b_b90k`). Early stop at epoch **34**; best val balanced accuracy at epoch **24** (~6.9 min). Checkpoint: `runs/clip_linear_derma/best.pt` (head only). Trainable **3,591 / 149.6M (0.0024%)**; frozen vision encoder **86.2M**.
+
+| Split | Acc | Balanced acc | Macro-F1 |
+|-------|----:|-------------:|---------:|
+| Val (best, epoch 24) | 0.742 | **0.741** | 0.616 |
+| Test | 0.741 | **0.723** | 0.595 |
+
+Train loss **1.46 → ~0.61**. Val CE fell steadily and bottomed ~epoch **32** (0.778) — almost the same as the bacc checkpoint (0.785 at epoch 24). No CE blow-up; the head is slightly underfit relative to DINO’s linear run. Val→test bacc drop is small (**−1.8 pt**). Prefer `best.pt` (epoch 24).
+
+| Method | Trainable | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
+| Swin-B LoRA | 1.01M | ~15 min | 19 | 0.863 | 0.872 | **0.872** | 0.835 |
+| ConvNeXt-Base full FT | ~88M | ~26 min | 24 | 0.861 | **0.895** | 0.868 | **0.840** |
+| DINOv3-B MLP (frozen) | 397k | ~9 min | 32 | 0.820 | 0.858 | 0.805 | 0.779 |
+| DINOv3-B linear | 5.4k | ~8 min | 25 | 0.782 | 0.780 | 0.781 | 0.694 |
+| **OpenCLIP B/16 linear** | **3.6k** | **~7 min** | **24** | 0.741 | 0.741 | **0.723** | 0.595 |
+| OpenCLIP B/16 zero-shot | 0 | ~2 min | — | 0.311 | 0.255 | 0.350 | 0.198 |
+
+**Vs zero-shot:** Linear probe is the CLIP number that matters — **+37 pt test bacc** (0.723 vs 0.350), **+49 pt acc**. The image encoder **does** carry dermoscopic signal; the text tower / prompts were the bottleneck.
+
+**Vs DINOv3 linear (fair frozen-probe match):** CLIP trails by **−5.8 pt test bacc** (0.723 vs 0.781) and **−10 pt macro-F1**. Same ViT-B/16 class, but DINO’s SSL features transfer better to this medical set than CLIP’s image–text embeddings. Frozen CLIP is **not** a substitute for DINO or for domain FT (Swin LoRA 0.872).
+
+Skip CLIP LoRA unless you want to test whether adapters close the remaining ~6 pt vs DINO linear. Original OpenAI B/16 is optional later if you want a “classic CLIP” point.
 
 ## C. Parameter-efficient fine-tuning (PEFT / LoRA for vision)
 
