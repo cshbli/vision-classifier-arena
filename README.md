@@ -23,6 +23,44 @@ Open, compact classification sets for small / fine-grained / domain-specific eva
 
 Use **official splits** when available. Match each backbone’s expected preprocessing (ImageNet norms vs CLIP’s own).
 
+### Oxford Flowers-102 — download and extract
+
+Official files from the [Oxford Flowers-102 page](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/):
+
+| File | Role |
+|------|------|
+| [`102flowers.tgz`](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz) | Images archive (~330 MB) |
+| [`imagelabels.mat`](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat) | Per-image class labels (1–102) |
+| [`setid.mat`](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat) | Official train / val / test image ids |
+
+Extract the archive and place the labels/splits beside it under `102flowers/` at the **repo root** (gitignored):
+
+```bash
+cd /path/to/vision-classifier-arena
+mkdir -p 102flowers
+# download the three files into 102flowers/, then:
+tar -xzf 102flowers/102flowers.tgz -C 102flowers
+# tgz expands to 102flowers/jpg/…; keep imagelabels.mat and setid.mat in 102flowers/
+```
+
+The folder should look like:
+
+| Path | Role |
+|------|------|
+| `jpg/image_00001.jpg` … `jpg/image_08189.jpg` | **8189** RGB images (variable resolution) |
+| `imagelabels.mat` | `labels` array length 8189; class ids **1–102** |
+| `setid.mat` | `trnid`, `valid`, `tstid` — **1-indexed** image ids for each split |
+
+Official split sizes (10 train + 10 val per class; remainder test):
+
+| Split | Count | Notes |
+|-------|------:|-------|
+| Train (`trnid`) | 1020 | 10 images / class |
+| Val (`valid`) | 1020 | 10 images / class |
+| Test (`tstid`) | 6149 | Rest of each class |
+
+Image `image_XXXXX.jpg` corresponds to label index `XXXXX` (1-based) in `imagelabels.mat` and to ids in `setid.mat`. Convert labels to **0–101** for PyTorch. Resize/crop to **224** at train time (same as DermaMNIST). Fine-grained few-shot stress test: ~10 labeled examples per class in the official train split.
+
 ### DermaMNIST@224 — download and extract
 
 Official file: [`dermamnist_224.npz`](https://zenodo.org/records/10519652/files/dermamnist_224.npz?download=1) (~1.1 GB) from [Zenodo MedMNIST+ v3.0](https://zenodo.org/records/10519652). An `.npz` is a zip of NumPy arrays. Extract it to `dermamnist_224/` at the **repo root** (gitignored).
@@ -39,22 +77,20 @@ The folder should contain these six files:
 
 7 classes (HAM10000): 0 akiec, 1 bcc, 2 bkl, 3 df, 4 mel, 5 nv, 6 vasc. License: CC BY-NC 4.0.
 
-### Dataset size — is DermaMNIST enough? What about &lt;1k / class?
+## Benchmark results on DermaMNIST@224
 
-**DermaMNIST (~10k images, 7 classes)** is a decent size for **ImageNet-pretrained** fine-tuning of ResNet50, ConvNeXt, and LoRA / linear-probe setups. Rough average is ~1.4k images/class, but HAM10000 is **imbalanced** — some lesion types have far fewer — so treat it as “medium small,” not huge. Full ViT fine-tuning can still overfit; prefer LoRA or a linear probe there.
+Primary metric: **test balanced accuracy**. Full per-method write-ups are in the sections below.
 
-For **&lt;1k per class** (or only hundreds of images total), DermaMNIST alone is **not** the best stress test. Gaps between full FT, LoRA, probes, and CLIP zero-shot show up more clearly on fine-grained sets that are small **by design**:
+| Method | Trainable | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
+| ResNet50 full FT | ~26M | ~42 min | 27 | 0.827 | 0.881 | 0.792 | 0.794 |
+| Swin-B LoRA | 1.01M | ~15 min | 19 | 0.863 | 0.872 | **0.872** | 0.835 |
+| ConvNeXt-Base full FT | ~88M | ~26 min | 24 | 0.861 | **0.895** | 0.868 | **0.840** |
+| DINOv3-B MLP (frozen) | 397k | ~9 min | 32 | 0.820 | 0.858 | 0.805 | 0.779 |
+| DINOv3-B linear | 5.4k | ~8 min | 25 | 0.782 | 0.780 | 0.781 | 0.694 |
+| OpenCLIP B/16 linear** | 3.6k | ~7 min | 24 | 0.741 | 0.741 | **0.723** | 0.595 |
+| OpenCLIP B/16 zero-shot | 0 | ~2 min | — | 0.311 | 0.255 | 0.350 | 0.198 |
 
-| Dataset | Scale | ~Images / class | Why it fits scarce-data comparisons |
-|---------|-------|-----------------|-------------------------------------|
-| **Oxford-IIIT Pets** | ~7k, 37 cls | **~200** | Clean natural-image transfer; still modest per class |
-| **Oxford Flowers-102** | ~8k, 102 cls | **~40–80** overall; official train is often **10 / class** | Classic few-shot transfer; harder than Derma |
-
-**Practical arena split**
-
-1. **DermaMNIST@224** — medium medical transfer (current run).
-2. **Oxford Flowers-102 (official split)** — tens of images per class; clearer gaps between full FT vs LoRA vs probe vs CLIP zero-shot.
-3. **Oxford-IIIT Pets** — extra natural-image check at a similar total size to Derma.
 
 ## ResNet50 baseline — full fine-tune on DermaMNIST
 
