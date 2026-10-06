@@ -484,7 +484,48 @@ Train loss **1.32 → ~0.08**. Val CE bottomed ~epoch **11** (0.478), then rose 
 
 **Vs ConvNeXt:** Within **~1 pt test bacc** of ConvNeXt full FT (0.859 vs 0.868) and on par with ConvNeXt LoRA (0.865). Acc and macro-F1 lag ConvNeXt more (**−6.5 pt** acc, **−6.4 pt** F1 vs ConvNeXt full) — Swin’s bacc is strong (rare classes), but overall precision/recall balance is weaker. Still the best **supervised Transformer full FT** so far.
 
-**Vs ViT LoRA:** Same test bacc (**0.859**); ViT LoRA has higher acc/F1 with far fewer trainable params. Next natural step: **Swin-B LoRA** to see if PEFT matches or beats this full-FT result with less overfit.
+**Vs ViT LoRA:** Same test bacc (**0.859**); ViT LoRA has higher acc/F1 with far fewer trainable params. **Swin-B LoRA** (below) tests whether PEFT matches or beats this full-FT result with less overfit.
+
+**LoRA fine-tune** — script: [`train_swin_b_lora_derma.py`](train_swin_b_lora_derma.py). Freezes Swin-B; wraps **MLP** `nn.Linear` layers and **PatchMerging.reduction** with rank-`r` adapters; trains those + the full `head` classifier. Attention stays frozen: torchvision `ShiftedWindowAttention` reads `qkv.weight` / `proj.weight` via the functional `shifted_window_attention` path (wrapping them raises `AttributeError` — same issue as ViT `out_proj`). Same `r=8` / `α=16` defaults as ConvNeXt / ViT LoRA. No `peft` package. Default run wraps **51** Linears; trainable **~1.01M / 87.8M (1.15%)**.
+
+```bash
+conda activate torch
+python train_swin_b_lora_derma.py --data dermamnist_224 --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--out` | `runs/swin_b_lora_derma` | Writes `best.pt` + `history.json` |
+| `--lora-r` / `--lora-alpha` | `8` / `16` | Rank and scale |
+| `--lora-dropout` | `0.05` | Dropout on LoRA input |
+| `--lr-lora` / `--lr-head` | `1e-3` / `1e-3` | Adapters + classifier |
+
+### Run analysis — `swin_b_lora_derma`
+
+Command: `--epochs 40 --batch-size 32 --eval-test` (`r=8`, `α=16`, MLP + PatchMerging LoRA). Early stop at epoch **29**; best val balanced accuracy at epoch **19** (~14.9 min). Checkpoint: `runs/swin_b_lora_derma/best.pt`. Trainable **1.01M / 87.8M (1.15%)**.
+
+| Split | Acc | Balanced acc | Macro-F1 |
+|-------|----:|-------------:|---------:|
+| Val (best, epoch 19) | 0.872 | **0.863** | 0.826 |
+| Test | 0.872 | **0.872** | 0.835 |
+
+Train loss **1.29 → ~0.08**. Val CE bottomed ~epoch **9** (0.500), still **0.527** at the bacc peak (epoch 19), then rose to **~0.71** by epoch 29 — milder CE overfit than Swin full FT (val CE ~0.91 at stop). Test bacc is **above** val (+0.9 pt); with a 1k val set that is noise. Prefer `best.pt` (epoch 19).
+
+| Method | Trainable | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
+| **Swin-B LoRA** | **1.01M** | **~15 min** | **19** | **0.863** | 0.872 | **0.872** | 0.835 |
+| ConvNeXt-Base full FT | ~88M | ~26 min | 24 | 0.861 | **0.895** | 0.868 | **0.840** |
+| ConvNeXt-Base LoRA | 1.45M | ~10 min | 9 | 0.855 | 0.870 | 0.865 | 0.791 |
+| Swin-B full FT | ~87M | ~13 min | 13 | 0.845 | 0.830 | 0.859 | 0.776 |
+| ViT-B/16 LoRA (MLP) | 0.74M | ~16 min | 21 | 0.838 | 0.881 | 0.859 | **0.849** |
+| DINOv3-B MLP (frozen) | 397k | ~9 min | 32 | 0.820 | 0.858 | 0.805 | 0.779 |
+| ViT-B/16 full FT | ~86M | ~22 min | 40 | 0.823 | 0.846 | 0.798 | 0.797 |
+
+**Vs Swin full FT:** LoRA wins on every test metric — **+1.4 pt bacc** (0.872 vs 0.859), **+4.2 pt acc**, **+5.9 pt macro-F1**, with **~87× fewer** trainable params and less CE overfit. On DermaMNIST, **Swin + LoRA** is the right hierarchical-ViT recipe, matching the ViT full-vs-LoRA lesson.
+
+**Vs ConvNeXt:** **Best test bacc in the arena so far** (0.872 vs ConvNeXt full 0.868 / LoRA 0.865). Acc still trails ConvNeXt full (**−2.3 pt**); macro-F1 is essentially tied (0.835 vs 0.840). Primary metric (balanced acc) favors Swin LoRA.
+
+**Vs ViT LoRA:** **+1.4 pt test bacc** (0.872 vs 0.859). ViT LoRA keeps a slight acc/F1 edge (0.881 / 0.849 vs 0.872 / 0.835) with fewer adapters. Hierarchical bias helps rare-class bacc; plain ViT LoRA is still competitive on overall accuracy.
 
 ## B. Zero-shot & linear probe CLIP (multimodal models)
 
