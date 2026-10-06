@@ -1,16 +1,15 @@
 # Vision Classifier Arena
 
-A benchmark suite comparing image classification performance across small, custom, and domain-specific datasets. Evaluates supervised CNNs (ResNet, ConvNeXt), self-supervised backbones (DINOv2/DINOv3 + MLP), and pre-trained Vision Transformers (ViT, Swin) under frozen feature probing, PEFT (LoRA), and full fine-tuning.
+A benchmark suite comparing image classification performance across small, custom, and domain-specific datasets. Evaluates supervised CNNs (ResNet, ConvNeXt), self-supervised backbones (DINOv3 + MLP), and pre-trained Vision Transformers (ViT, Swin) under frozen feature probing, PEFT (LoRA), and full fine-tuning.
 
-| Architecture Family | Specific Model | Training Strategy | Strengths on Small Data |
-|---------------------|----------------|-------------------|-------------------------|
-| Classic CNN | ResNet50 | Full Fine-Tuning | Strong baseline, fast convergence. |
-| Modern CNN | ConvNeXt-Base | Full / LoRA Fine-Tuning | High accuracy; inductive bias resists overfitting vs standard ViT. |
-| Self-Supervised ViT | DINOv2 / DINOv3 | Linear Probe / MLP Head | No backbone tuning; preserves global features. |
-| Supervised ViT | ViT-B/16 | Full vs. **LoRA** Fine-Tuning | High ceiling; full FT overfits easily — LoRA helps a lot. |
-| Hierarchical ViT | **Swin-B** (Swin-T optional) | Full / LoRA Fine-Tuning | CNN–Transformer hybrid; more data-efficient than plain ViT. |
-| Multimodal | **OpenCLIP ViT-B/16** (DataComp-XL) | **Zero-shot** vs. Linear Probe | Zero training images (zero-shot); linear probe is a strong small-data SOTA with low compute. |
-| PEFT (strategy) | LoRA on ViT / Swin / ConvNeXt | Train ~1% of params | Higher accuracy + faster training than full FT on small samples. |
+| Architecture Family | Specific Model | Params | Pretrain data | Label size | Training Strategy | Strengths on Small Data |
+|---------------------|----------------|-------:|---------------|------------|-------------------|-------------------------|
+| Classic CNN | ResNet50 | 25.6M | ImageNet-1K (~1.28M images) | 1,000 classes | Full Fine-Tuning | Strong baseline, fast convergence. |
+| Modern CNN | ConvNeXt-Base | 88.6M | ImageNet-1K (~1.28M images) | 1,000 classes | Full / LoRA Fine-Tuning | High accuracy; inductive bias resists overfitting vs standard ViT. |
+| Self-Supervised ViT | DINOv3 ViT-B/16 | 85.7M | LVD-1689M (~1.69B images) | — (no class labels; SSL) | Linear Probe / MLP Head | No backbone tuning; preserves global features. |
+| Supervised ViT | ViT-B/16 | 86.6M | ImageNet-1K (~1.28M images) | 1,000 classes | Full / LoRA Fine-Tuning | High ceiling; full FT overfits easily — LoRA helps a lot. |
+| Hierarchical ViT | Swin-B | 87.8M | ImageNet-1K (~1.28M images) | 1,000 classes | Full / LoRA Fine-Tuning | CNN–Transformer hybrid; more data-efficient than plain ViT. |
+| Multimodal | OpenCLIP ViT-B/16 (DataComp-XL) | 86.2M vision / 150M with text | DataComp-1B (~1.4B image–text pairs; ~13B samples seen) | — (captions, not a closed label set) | **Zero-shot** / Linear Probe | Zero training images (zero-shot); linear probe is a strong small-data SOTA with low compute. |
 
 ## Datasets
 
@@ -20,30 +19,9 @@ Open, compact classification sets for small / fine-grained / domain-specific eva
 |---------|--------|---------------|-------------|----------|
 | **Oxford-IIIT Pets** | Fine-grained animals | ~7k images, 37 classes | Small, clean, standard transfer baseline | [Project page](https://www.robots.ox.ac.uk/~vgg/data/pets/) · [images](https://www.robots.ox.ac.uk/~vgg/data/pets/data/images.tar.gz) · [annotations](https://www.robots.ox.ac.uk/~vgg/data/pets/data/annotations.tar.gz) |
 | **Oxford Flowers-102** | Fine-grained | ~8k, 102 classes | Harder fine-grained; few shots per class | [Project page](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/) · [images](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz) · [labels](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat) · [splits](https://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat) |
-| **CUB-200-2011** | Fine-grained birds | ~12k, 200 classes | Classic small-data / fine-grained stress test | [Project page](https://www.vision.caltech.edu/datasets/cub_200_2011/) · [Caltech DATA record](https://data.caltech.edu/records/65de6-vp158) |
-| **Stanford Cars** | Fine-grained products | ~16k, 196 classes | “Custom catalog” style recognition | [Project page](https://ai.stanford.edu/~jkrause/cars/car_dataset.html) · via [torchvision `StanfordCars`](https://pytorch.org/vision/stable/generated/torchvision.datasets.StanfordCars.html) / Hugging Face mirrors if Stanford HTTP links fail |
-| **FGVC Aircraft** | Fine-grained | ~10k, 100 classes | Additional fine-grained check | [Project page](https://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/) · [data archive](https://www.robots.ox.ac.uk/~vgg/data/fgvc-aircraft/archives/fgvc-aircraft-2013b.tar.gz) |
-| **MedMNIST** (2D first; see below) | Medical | Small–medium, many tasks | Domain shift; easy to automate | [medmnist.com](https://medmnist.com/) · [GitHub](https://github.com/MedMNIST/MedMNIST) · [Zenodo MedMNIST+](https://zenodo.org/records/10519652) · start with [`dermamnist_224.npz`](https://zenodo.org/records/10519652/files/dermamnist_224.npz?download=1) |
-| **EuroSAT** | Satellite / remote sensing | ~27k, 10 classes | Non-natural-image domain | [GitHub](https://github.com/phelber/EuroSAT) · [RGB zip (DFKI)](http://madm.dfki.de/files/sentinel/EuroSAT.zip) |
+| **DermaMNIST@224** | Medical (dermatoscopy) | ~10k images, 7 classes | Domain shift; imbalanced; current arena run | [medmnist.com](https://medmnist.com/) · [Zenodo MedMNIST+](https://zenodo.org/records/10519652) · [`dermamnist_224.npz`](https://zenodo.org/records/10519652/files/dermamnist_224.npz?download=1) |
 
 Use **official splits** when available. Match each backbone’s expected preprocessing (ImageNet norms vs CLIP’s own).
-
-### MedMNIST — which 2D task first
-
-MedMNIST has many subsets (2D + 3D). Skip 3D for now. Prefer size **224** (or 128) for ResNet/ViT/CLIP, not only 28×28.
-
-| Priority | Dataset | Why |
-|----------|---------|-----|
-| **1. Start** | **DermaMNIST** | Small (~10k), multi-class (7), RGB dermatoscopy, strong domain shift, fast loops |
-| **2. Next** | **PathMNIST** | Larger (~107k), 9 tissue classes, histology — harder transfer test |
-| **3. Optional** | **OrganAMNIST** | CT organs, 11 classes; pick **one** of A/C/S (A is the usual default) |
-| Later | BloodMNIST, TissueMNIST | More bioimage variety once the pipeline is solid |
-| Skip at first | ChestMNIST | Multi-label (14) — different metrics/training |
-| Skip at first | PneumoniaMNIST | Binary and often too easy — weak ranking signal |
-| Skip at first | RetinaMNIST | Ordinal / small; more awkward than plain multi-class |
-| Skip at first | BreastMNIST | Tiny binary; easy to overfit and over-interpret |
-
-Wire the arena on **DermaMNIST@224**, then add **PathMNIST** when you want a heavier medical benchmark.
 
 ### DermaMNIST@224 — download and extract
 
@@ -69,17 +47,14 @@ For **&lt;1k per class** (or only hundreds of images total), DermaMNIST alone is
 
 | Dataset | Scale | ~Images / class | Why it fits scarce-data comparisons |
 |---------|-------|-----------------|-------------------------------------|
+| **Oxford-IIIT Pets** | ~7k, 37 cls | **~200** | Clean natural-image transfer; still modest per class |
 | **Oxford Flowers-102** | ~8k, 102 cls | **~40–80** overall; official train is often **10 / class** | Classic few-shot transfer; harder than Derma |
-| **CUB-200-2011** | ~12k, 200 cls | **~60** | Standard small-data / fine-grained stress test |
-| **Stanford Cars** | ~16k, 196 cls | **~80** | Catalog-style; still &lt;1k/class |
-| **FGVC Aircraft** | ~10k, 100 cls | **~100** | Similar few-per-class regime |
-| **BreastMNIST** / **RetinaMNIST** | Tiny medical | Very small | Domain shift, but binary/ordinal — weaker for architecture ranking |
 
 **Practical arena split**
 
-1. **DermaMNIST@224** — medium medical transfer (first medical run).
-2. **Flowers-102 (official split)** or **CUB** — when you want tens of images per class and clearer gaps between full FT vs LoRA vs probe vs CLIP zero-shot.
-3. Optional: **subsample** Derma/Path (e.g. 50–100 / class) for a controlled few-shot curve on the same medical domain.
+1. **DermaMNIST@224** — medium medical transfer (current run).
+2. **Oxford Flowers-102 (official split)** — tens of images per class; clearer gaps between full FT vs LoRA vs probe vs CLIP zero-shot.
+3. **Oxford-IIIT Pets** — extra natural-image check at a similar total size to Derma.
 
 ## ResNet50 baseline — full fine-tune on DermaMNIST
 
@@ -258,9 +233,9 @@ Train loss **1.21 → ~0.09** by early stop. Best epoch also had the **lowest va
 
 **Vs full FT:** LoRA matches full FT on the arena’s primary metric (**test bacc 0.865 vs 0.868**, −0.3 pt) with **~60× fewer trainable params** and **~2.6× less wall-clock**. Overall acc (−2.5 pt) and macro-F1 (−4.9 pt) lag — full FT still better when you care about precision on rare classes, not only per-class recall. Prefer `best.pt` (epoch 9). On this medium-sized medical set, LoRA is the better **accuracy-per-compute** default; full FT remains the ceiling for macro-F1.
 
-## Self-supervised ViT — DINOv2 / DINOv3 (linear probe / MLP)
+## Self-supervised ViT — DINOv3 (linear probe / MLP)
 
-**Why include it:** DINOv2/DINOv3 are self-supervised ViTs trained to produce strong general visual features **without** ImageNet class labels. On small / domain-shifted data, a **frozen** DINO backbone + tiny head often beats full fine-tuning a supervised CNN, because you keep the pretrained representation instead of overfitting it.
+**Why include it:** DINOv3 is a self-supervised ViT trained to produce strong general visual features **without** ImageNet class labels. On small / domain-shifted data, a **frozen** DINO backbone + tiny head often beats full fine-tuning a supervised CNN, because you keep the pretrained representation instead of overfitting it.
 
 **Protocol:** freeze the backbone → extract the **CLS** token → train only a head with CE (+ class weights), early stop on val balanced accuracy. Same DermaMNIST@224 splits and ImageNet mean/std as the CNN runs.
 
@@ -270,21 +245,6 @@ Train loss **1.21 → ~0.09** by early stop. Best epoch also had the **lowest va
 | **MLP head** | Small MLP (e.g. Linear → GELU → Dropout → Linear) | Second run if linear plateaus; slightly more capacity, slightly more overfit risk |
 
 Both keep DINO frozen. They differ only in head capacity — not in backbone training.
-
-**DINOv2 linear probe (no license gate)** — script: [`train_dinov2_linear_derma.py`](train_dinov2_linear_derma.py). Official weights via PyTorch Hub [`facebookresearch/dinov2`](https://github.com/facebookresearch/dinov2). Default: **`dinov2_vitb14`** (ViT-B/14, ~86M) so it matches ConvNeXt-Base / the planned DINOv3-B slot. DINOv2 uses **patch 14** (vs DINOv3’s 16); 224×224 is still the usual input. No Hugging Face login.
-
-```bash
-conda activate torch
-python train_dinov2_linear_derma.py --data dermamnist_224 --epochs 40 --batch-size 32 --eval-test
-```
-
-| Flag | Default | Notes |
-|------|---------|-------|
-| `--hub-model` | `dinov2_vitb14` | Also `dinov2_vits14`, `dinov2_vitl14`, `dinov2_vitg14` |
-| `--out` | `runs/dinov2_linear_derma` | Writes `best.pt` + `history.json` |
-| `--lr` | `1e-3` | Head only (backbone frozen) |
-
-First run clones the Hub repo and downloads weights into `~/.cache/torch/hub/`. Same CE / class weights / early-stop-on-bacc protocol as ConvNeXt. Keep DINOv3 below for when Meta/HF access is approved.
 
 **DINOv3 linear probe** — script: [`train_dinov3_linear_derma.py`](train_dinov3_linear_derma.py). Default backbone: [`facebook/dinov3-vitb16-pretrain-lvd1689m`](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m) (ViT-B/16). Needs Hugging Face Transformers (not in the base `torch` env until you install it):
 
@@ -372,7 +332,7 @@ Train loss **1.18 → ~0.12**. Val CE bottomed mid-run (~0.62) then rose while t
 
 **Vs linear probe (same backbone):** MLP gains **+2.4 pt test bacc** (0.805 vs 0.781), **+7.8 pt test acc**, and **+8.5 pt macro-F1** (0.779 vs 0.694). Nonlinearity helps rare-class precision/recall, not only overall accuracy. Prefer `best.pt` (epoch 32), not epoch 40.
 
-**Vs ConvNeXt:** Still **~6 pt behind** LoRA/full FT on test bacc (0.805 vs ~0.87). Frozen DINOv3 + MLP is a stronger SSL head than linear, but does not replace domain adaptation of the backbone. Next: DINOv2 linear/MLP, or light DINO LoRA if you want to close the CNN gap.
+**Vs ConvNeXt:** Still **~6 pt behind** LoRA/full FT on test bacc (0.805 vs ~0.87). Frozen DINOv3 + MLP is a stronger SSL head than linear, but does not replace domain adaptation of the backbone. Next: light DINO LoRA if you want to close the CNN gap.
 
 ## Supervised ViT — ViT-B/16 (full fine-tune)
 
