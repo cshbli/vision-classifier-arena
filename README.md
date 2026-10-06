@@ -77,24 +77,26 @@ The folder should contain these six files:
 
 7 classes (HAM10000): 0 akiec, 1 bcc, 2 bkl, 3 df, 4 mel, 5 nv, 6 vasc. License: CC BY-NC 4.0.
 
-## Benchmark results on DermaMNIST@224
+#### What do the class weights mean?
 
-Primary metric: **test balanced accuracy**. Full per-method write-ups are in the sections below.
+DermaMNIST is **imbalanced** (especially **nv**). Arena scripts use inverse-frequency weights in CrossEntropyLoss so rare classes are not ignored:
 
-| Method | Trainable | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
-|--------|----------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
-| ResNet50 full FT | ~26M | ~42 min | 27 | 0.827 | 0.881 | 0.792 | 0.794 |
-| Swin-B LoRA | 1.01M | ~15 min | 19 | 0.863 | 0.872 | **0.872** | 0.835 |
-| ConvNeXt-Base full FT | ~88M | ~26 min | 24 | 0.861 | **0.895** | 0.868 | **0.840** |
-| DINOv3-B MLP (frozen) | 397k | ~9 min | 32 | 0.820 | 0.858 | 0.805 | 0.779 |
-| DINOv3-B linear | 5.4k | ~8 min | 25 | 0.782 | 0.780 | 0.781 | 0.694 |
-| OpenCLIP B/16 linear** | 3.6k | ~7 min | 24 | 0.741 | 0.741 | **0.723** | 0.595 |
-| OpenCLIP B/16 zero-shot | 0 | ~2 min | — | 0.311 | 0.255 | 0.350 | 0.198 |
+$$
+w_c = \frac{N}{C \cdot n_c}
+$$
 
+where $N$ = train size, $C$ = 7 classes, and $n_c$ = count of class $c$. Mean weight $\approx 1$.
 
-## ResNet50 baseline — full fine-tune on DermaMNIST
+| Class | Weight | Meaning |
+|-------|-------:|---------|
+| **nv** | 0.21 | Very common (many nevi) → down-weighted |
+| bkl, mel | ~1.3 | Near average |
+| bcc, akiec | 2.8–4.4 | Less common → up-weighted |
+| **vasc**, **df** | 10–12.5 | Rare → mistakes cost much more |
 
-First arena CNN baseline: ImageNet-pretrained **ResNet50**, full fine-tune on local `dermamnist_224/` (train 7007 / val 1003 / test 2005, 7 classes). Script: [`train_resnet50_derma.py`](train_resnet50_derma.py).
+The model is pushed to care about rare lesions, not only dominant **nv**. That helps balanced accuracy / minority recall, sometimes at a small cost to overall accuracy.
+
+## Training Strategy
 
 ### Full FT vs freeze the backbone?
 
@@ -108,7 +110,7 @@ With ~7k train images, a frozen ResNet usually **underperforms** full FT. Keep a
 
 ### Differential learning rates
 
-Yes — use **different LRs** for backbone and head:
+Use **different LRs** for backbone and head:
 
 | Group | Default LR | Role |
 |-------|------------|------|
@@ -116,6 +118,49 @@ Yes — use **different LRs** for backbone and head:
 | **Head** (new `fc`) | `1e-3` (~10×) | Fast adapt of the classifier |
 
 Optimizer: AdamW, weight decay `0.01`, cosine schedule. Train **all** layers. Inverse-frequency **class weights** are on by default (HAM10000 imbalance). Early stop on **val balanced accuracy**; also log accuracy and macro-F1.
+
+## Benchmarking Criteria
+
+For each class $c$, with precision $P_c$ and recall $R_c$:
+
+$$
+\mathrm{F1}_c = \frac{2 P_c R_c}{P_c + R_c}, \qquad
+\mathrm{macro\text{-}F1} = \frac{1}{C}\sum_{c=1}^{C} \mathrm{F1}_c
+$$
+
+Every class counts equally, so **nv** cannot hide weak df/vasc/mel.
+
+| Metric | Meaning |
+|--------|---------|
+| **acc** | Overall % correct (skewed by majority class) |
+| **bacc** | Mean per-class recall (class-equal) |
+| **macro_f1** | Mean per-class F1 (class-equal; also penalizes false positives) |
+
+## Benchmark results on DermaMNIST@224
+
+Primary metric: **test balanced accuracy**. Full per-method write-ups are in the sections below.
+
+| Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|---------:|---------:|----------:|--------------:|
+| ResNet50 | ~26M | 0.827 | 0.881 | 0.792 | 0.794 |
+| Swin-B LoRA | 1.01M | 0.863 | 0.872 | **0.872** | 0.835 |
+| ConvNeXt-Base full FT | ~88M | 0.861 | **0.895** | 0.868 | **0.840** |
+| DINOv3-B MLP (frozen) | 397k | 0.820 | 0.858 | 0.805 | 0.779 |
+| DINOv3-B linear | 5.4k | 0.782 | 0.780 | 0.781 | 0.694 |
+| OpenCLIP B/16 linear | 3.6k | 0.741 | 0.741 | **0.723** | 0.595 |
+| OpenCLIP B/16 zero-shot | 0 | 0.311 | 0.255 | 0.350 | 0.198 |
+
+## Benchmark results on Oxford Flowers-102
+
+Primary metric: **test balanced accuracy**. Full per-method write-ups are in the sections below.
+
+| Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|---------:|---------:|----------:|--------------:|
+| ResNet50 | ~24M | 0.925 | 0.892 | **0.910** | 0.888 |
+
+## ResNet50 — full fine-tune on DermaMNIST
+
+ImageNet-pretrained **ResNet50**, full fine-tune on local `dermamnist_224/` (train 7007 / val 1003 / test 2005, 7 classes). Script: [`train_resnet50_derma.py`](train_resnet50_derma.py).
 
 ### Usage
 
@@ -136,7 +181,7 @@ python train_resnet50_derma.py --data dermamnist_224 --epochs 40 --batch-size 32
 
 `runs/` and `*.pt` are gitignored. Prefer `best.pt` (best val balanced accuracy), not the last epoch.
 
-### Baseline run analysis — `resnet50_derma`
+### Run analysis — `resnet50_derma`
 
 Command: `--epochs 40 --batch-size 32 --eval-test`. Early stop at epoch **37**; best val balanced accuracy at epoch **27** (~42 min). Checkpoint: `runs/resnet50_derma/best.pt`.
 
@@ -147,41 +192,40 @@ Command: `--epochs 40 --batch-size 32 --eval-test`. Early stop at epoch **37**; 
 
 (Val acc at the best-bacc epoch was ~0.88; train loss kept falling while val loss plateaued — mild overfit, early stop handled it.)
 
-#### What do the class weights mean?
-
-Inverse-frequency weights in CrossEntropyLoss so rare classes are not ignored:
-
-```text
-w_c = N / (C * n_c)
-```
-
-`N` = train size, `C` = 7, `n_c` = count of class `c`. Mean weight ≈ 1.
-
-| Class | Weight | Meaning |
-|-------|-------:|---------|
-| **nv** | 0.21 | Very common (many nevi) → down-weighted |
-| bkl, mel | ~1.3 | Near average |
-| bcc, akiec | 2.8–4.4 | Less common → up-weighted |
-| **vasc**, **df** | 10–12.5 | Rare → mistakes cost much more |
-
-The model is pushed to care about rare lesions, not only dominant **nv**. That helps balanced accuracy / minority recall, sometimes at a small cost to overall accuracy.
-
-#### What does macro-F1 mean?
-
-For each class: precision, recall, then `F1 = 2 * P * R / (P + R)`. **Macro-F1** = **unweighted average** of the 7 per-class F1s — every class counts equally, so **nv** cannot hide weak df/vasc/mel.
-
-| Metric | Meaning |
-|--------|---------|
-| **acc** | Overall % correct (skewed by majority class) |
-| **bacc** | Mean per-class recall (class-equal) |
-| **macro_f1** | Mean per-class F1 (class-equal; also penalizes false positives) |
-
 #### Takeaways
 
 - Solid first ResNet50 full-FT baseline on DermaMNIST@224.
 - Prefer `best.pt` (epoch 27), not the last epoch.
 - Test ~79% balanced / ~88% overall is a reasonable starting point; ~3–4 pt bacc drop val→test is normal.
 - Checkpointing on **bacc** (not acc) is the right default under class imbalance.
+
+## ResNet50 - Full fine-tune on Oxford Flowers-102
+
+Fine-grained few-shot check: ImageNet-pretrained **ResNet50**, full fine-tune on local `102flowers/` (official split **1020 / 1020 / 6149**, **102** classes, 10 train images per class). Script: [`train_resnet50_flowers.py`](train_resnet50_flowers.py). Loads `imagelabels.mat` / `setid.mat` without scipy; labels converted to **0–101**.
+
+```bash
+conda activate torch
+python train_resnet50_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/resnet50_flowers` | Writes `best.pt` + `history.json` |
+| `--lr-backbone` / `--lr-head` | `1e-4` / `1e-3` | Differential FT |
+| `--batch-size` | `32` | Drop to `16` if GPU OOM |
+| `--patience` | `10` | Early stop on val balanced acc |
+| `--eval-test` | off | Score the large official test split after training |
+
+Official train is **balanced** (10/class), so class weights ≈ 1; kept on for protocol parity with Derma. Expect higher variance than Derma — only 10 shots per class.
+
+### Run analysis — `resnet50_flowers`
+
+Command: `--epochs 40 --batch-size 32 --eval-test`. Early stop at epoch **30**; best val balanced accuracy at epoch **20** (~1.7 min). Checkpoint: `runs/resnet50_flowers/best.pt`. Model **23.7M** (ResNet50 with 102-way head).
+
+Train loss **4.14 → ~0.001**. Val CE fell quickly through epoch **~7**, then slowly to a min ~epoch **25** (0.313); bacc peaked earlier at epoch **20**. No severe CE blow-up — mild late plateau, early stop at 30. Val and test **acc = bacc** on the balanced val set (10/class); on the larger test set classes are uneven, so test acc (**0.892**) sits a bit under test bacc (**0.910**). Val→test bacc drop is small (**−1.4 pt**). Prefer `best.pt` (epoch 20).
+
+**Takeaways:** With only **10 images/class**, ImageNet ResNet50 still reaches **~91% test bacc** on Flowers — natural-image fine-grained transfer is much easier than Derma’s dermatoscopy domain shift (Derma test bacc **0.792**). Training is fast (~2 min) because the train set is tiny (1020). Acc/bacc/macro-F1 stay close (balanced train/val). This is a strong CNN baseline for the Flowers arena track;
 
 ## A. Modern CNN (ConvNeXt)
 
