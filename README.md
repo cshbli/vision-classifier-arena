@@ -77,7 +77,7 @@ The folder should contain these six files:
 
 7 classes (HAM10000): 0 akiec, 1 bcc, 2 bkl, 3 df, 4 mel, 5 nv, 6 vasc. License: CC BY-NC 4.0.
 
-#### What do the class weights mean?
+#### Class Imbalance and Class Weights
 
 DermaMNIST is **imbalanced** (especially **nv**). Arena scripts use inverse-frequency weights in CrossEntropyLoss so rare classes are not ignored:
 
@@ -143,11 +143,12 @@ Primary metric: **test balanced accuracy**. Full per-method write-ups are in the
 | Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
 |--------|----------:|---------:|---------:|----------:|--------------:|
 | ResNet50 | ~26M | 0.827 | 0.881 | 0.792 | 0.794 |
-| Swin-B LoRA | 1.01M | 0.863 | 0.872 | **0.872** | 0.835 |
-| ConvNeXt-Base full FT | ~88M | 0.861 | **0.895** | 0.868 | **0.840** |
-| DINOv3-B MLP (frozen) | 397k | 0.820 | 0.858 | 0.805 | 0.779 |
-| DINOv3-B linear | 5.4k | 0.782 | 0.780 | 0.781 | 0.694 |
-| OpenCLIP B/16 linear | 3.6k | 0.741 | 0.741 | **0.723** | 0.595 |
+| Swin LoRA | 1.01M | 0.863 | 0.872 | 0.872 | 0.835 |
+| ConvNeXt Base full FT | ~88M | 0.861 | 0.895 | 0.868 | 0.840 |
+| ConvNeXt Base LoRA | 1.45M |  0.855 | 0.870 | 0.865 | 0.791 |
+| DINOv3 linear | 5.4k | 0.782 | 0.780 | 0.781 | 0.694 |
+| DINOv3 MLP | 397k | 0.820 | 0.858 | 0.805 | 0.779 |
+| OpenCLIP B/16 linear | 3.6k | 0.741 | 0.741 | 0.723 | 0.595 |
 | OpenCLIP B/16 zero-shot | 0 | 0.311 | 0.255 | 0.350 | 0.198 |
 
 ## Benchmark results on Oxford Flowers-102
@@ -185,17 +186,8 @@ python train_resnet50_derma.py --data dermamnist_224 --epochs 40 --batch-size 32
 
 Command: `--epochs 40 --batch-size 32 --eval-test`. Early stop at epoch **37**; best val balanced accuracy at epoch **27** (~42 min). Checkpoint: `runs/resnet50_derma/best.pt`.
 
-| Split | Acc | Balanced acc | Macro-F1 |
-|-------|----:|-------------:|---------:|
-| Val (best) | — | **0.827** | — |
-| Test | 0.881 | **0.792** | 0.794 |
-
-(Val acc at the best-bacc epoch was ~0.88; train loss kept falling while val loss plateaued — mild overfit, early stop handled it.)
-
 #### Takeaways
 
-- Solid first ResNet50 full-FT baseline on DermaMNIST@224.
-- Prefer `best.pt` (epoch 27), not the last epoch.
 - Test ~79% balanced / ~88% overall is a reasonable starting point; ~3–4 pt bacc drop val→test is normal.
 - Checkpointing on **bacc** (not acc) is the right default under class imbalance.
 
@@ -223,13 +215,13 @@ Official train is **balanced** (10/class), so class weights ≈ 1; kept on for p
 
 Command: `--epochs 40 --batch-size 32 --eval-test`. Early stop at epoch **30**; best val balanced accuracy at epoch **20** (~1.7 min). Checkpoint: `runs/resnet50_flowers/best.pt`. Model **23.7M** (ResNet50 with 102-way head).
 
-Train loss **4.14 → ~0.001**. Val CE fell quickly through epoch **~7**, then slowly to a min ~epoch **25** (0.313); bacc peaked earlier at epoch **20**. No severe CE blow-up — mild late plateau, early stop at 30. Val and test **acc = bacc** on the balanced val set (10/class); on the larger test set classes are uneven, so test acc (**0.892**) sits a bit under test bacc (**0.910**). Val→test bacc drop is small (**−1.4 pt**). Prefer `best.pt` (epoch 20).
+#### Takeaways
+- With only **10 images/class**, ImageNet ResNet50 still reaches **~91% test bacc** on Flowers — natural-image fine-grained transfer is much easier than Derma’s dermatoscopy domain shift (Derma test bacc **0.792**). 
+- Training is fast (~2 min) because the train set is tiny (1020). Acc/bacc/macro-F1 stay close (balanced train/val). 
 
-**Takeaways:** With only **10 images/class**, ImageNet ResNet50 still reaches **~91% test bacc** on Flowers — natural-image fine-grained transfer is much easier than Derma’s dermatoscopy domain shift (Derma test bacc **0.792**). Training is fast (~2 min) because the train set is tiny (1020). Acc/bacc/macro-F1 stay close (balanced train/val). This is a strong CNN baseline for the Flowers arena track;
+## Modern CNN (ConvNeXt)
 
-## A. Modern CNN (ConvNeXt)
-
-**Why include it:** ResNet (2015) is a classic baseline, but ConvNeXt modernized CNN architectures using design choices borrowed from Vision Transformers (7×7 depthwise convolutions, inverted bottlenecks, LayerNorm).
+ResNet (2015) is a classic baseline, but ConvNeXt modernized CNN architectures using design choices borrowed from Vision Transformers (7×7 depthwise convolutions, inverted bottlenecks, LayerNorm).
 
 ConvNeXt comes in multiple capacity variants (same block design; different width/depth). This arena defaults to **ConvNeXt-Base**.
 
@@ -245,7 +237,8 @@ T–L disk sizes are torchvision ImageNet-1K checkpoints; XL is estimated from ~
 
 **Small-data impact:** ConvNeXt often outperforms ViTs on small custom datasets because its strong inductive bias prevents overfitting better than a standard ViT.
 
-**Full fine-tune on DermaMNIST:** Same protocol as ResNet50 — ImageNet-pretrained **ConvNeXt-Base**, differential LRs, class weights, early stop on val balanced accuracy. The classifier head is `model.classifier[2]` (not ResNet’s `fc`). Script: [`train_convnext_base_derma.py`](train_convnext_base_derma.py).
+### Full fine-tune on DermaMNIST
+Same protocol as ResNet50 — ImageNet-pretrained **ConvNeXt-Base**, differential LRs, class weights, early stop on val balanced accuracy. The classifier head is `model.classifier[2]` (not ResNet’s `fc`). Script: [`train_convnext_base_derma.py`](train_convnext_base_derma.py).
 
 ```bash
 conda activate torch
@@ -258,25 +251,14 @@ python train_convnext_base_derma.py --data dermamnist_224 --epochs 40 --batch-si
 | `--lr-backbone` / `--lr-head` | `1e-4` / `1e-3` | Head = `classifier.*` |
 | `--batch-size` | `32` | Drop to `16` if GPU OOM |
 
-### Run analysis — `convnext_base_derma`
+#### Run analysis — `convnext_base_derma`
 
 Command: `--epochs 40 --batch-size 32 --eval-test`. Early stop at epoch **34**; best val balanced accuracy at epoch **24** (~26 min). Checkpoint: `runs/convnext_base_derma/best.pt`.
 
-| Split | Acc | Balanced acc | Macro-F1 |
-|-------|----:|-------------:|---------:|
-| Val (best, epoch 24) | 0.894 | **0.861** | 0.827 |
-| Test | 0.895 | **0.868** | 0.840 |
+ConvNeXt-Base is the stronger full-FT CNN here: **+7.6 pt test bacc**, **+4.6 pt macro-F1**, **+1.4 pt acc**. Acc moves less because **nv** already dominates; the gain is mostly rarer lesion types. 
 
-Train loss **1.28 → ~0.005**. Val CE loss bottomed ~epoch **6** (~0.52), then rose (~0.85 at the best-bacc epoch) — mild overfitting on the loss, while **bacc still climbed** until epoch 24. Val acc and bacc can disagree (e.g. epoch 19: acc 0.901, bacc 0.799); checkpointing on **bacc** avoided locking onto majority **nv**. Test bacc is slightly *above* val (0.868 vs 0.861); with a 1k val set that is noise, not a leak.
-
-| Model | Params | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
-|-------|-------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
-| ResNet50 | ~26M | ~42 min | 27 | 0.827 | 0.881 | 0.792 | 0.794 |
-| **ConvNeXt-Base** | ~88M | ~26 min | 24 | **0.861** | **0.895** | **0.868** | **0.840** |
-
-ConvNeXt-Base is the stronger full-FT CNN here: **+7.6 pt test bacc**, **+4.6 pt macro-F1**, **+1.4 pt acc**. Acc moves less because **nv** already dominates; the gain is mostly rarer lesion types. Prefer `best.pt` (epoch 24), not epoch 34. Later arena methods (LoRA, probes, CLIP) should beat **~87% test bacc / ~84% macro-F1**, not only overall accuracy.
-
-**LoRA on ConvNeXt:** LoRA is often thought of as “Transformers only” because the original method targets dense / Linear weights (especially attention). It is **not** limited to Transformers: low-rank updates apply wherever there are suitable weight matrices. **1×1 convolutions** behave like linear layers over channels, so classic LoRA fits naturally; larger kernels may use Conv-LoRA-style factorizations. **ConvNeXt** is a modern CNN with Transformer-inspired blocks, so PEFT/LoRA is much more natural here than on older CNN designs — which is why this arena lists **Full / LoRA** for ConvNeXt alongside ViT/Swin.
+### LoRA on ConvNeXt on DermaMNIST
+LoRA is often thought of as “Transformers only” because the original method targets dense / Linear weights (especially attention). It is **not** limited to Transformers: low-rank updates apply wherever there are suitable weight matrices. **1×1 convolutions** behave like linear layers over channels, so classic LoRA fits naturally; larger kernels may use Conv-LoRA-style factorizations. **ConvNeXt** is a modern CNN with Transformer-inspired blocks, so PEFT/LoRA is much more natural here than on older CNN designs — which is why this arena lists **Full / LoRA** for ConvNeXt alongside ViT/Swin.
 
 Script: [`train_convnext_base_lora_derma.py`](train_convnext_base_lora_derma.py). Freezes the backbone; wraps the **Linear** layers in `features` (the inverted-bottleneck projections) with rank-`r` adapters; trains those adapters plus the full `classifier` head. Depthwise 7×7 convs stay frozen (no Conv-LoRA). No `peft` package — self-contained `LoRALinear`. Same data, class weights, and early-stop-on-bacc protocol as full FT.
 
@@ -294,28 +276,15 @@ python train_convnext_base_lora_derma.py --data dermamnist_224 --epochs 40 --bat
 
 With `r=8` this is roughly **~1–2%** of ConvNeXt-Base parameters trainable. Compare against full-FT test **bacc 0.868 / macro-F1 0.840**.
 
-### Run analysis — `convnext_base_lora_derma`
+#### Run analysis — `convnext_base_lora_derma`
 
 Command: `--epochs 40 --batch-size 32 --eval-test` (`r=8`, `α=16`, dropout `0.05`). Early stop at epoch **19**; best val balanced accuracy at epoch **9** (~9.8 min). Checkpoint: `runs/convnext_base_lora_derma/best.pt`. Trainable **1.45M / 89.0M (1.63%)**.
 
-| Split | Acc | Balanced acc | Macro-F1 |
-|-------|----:|-------------:|---------:|
-| Val (best, epoch 9) | 0.854 | **0.855** | 0.791 |
-| Test | 0.870 | **0.865** | 0.791 |
-
-Train loss **1.21 → ~0.09** by early stop. Best epoch also had the **lowest val CE** (0.446) — unlike full FT, where val loss rose while bacc kept climbing. After epoch 9, val bacc bounced (0.79–0.85) without a new best; patience-10 stopped at 19. Test bacc again slightly above val (noise on a 1k val set).
-
-| Method | Trainable | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
-|--------|----------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
-| ResNet50 full FT | ~26M | ~42 min | 27 | 0.827 | 0.881 | 0.792 | 0.794 |
-| ConvNeXt-Base full FT | ~88M | ~26 min | 24 | 0.861 | **0.895** | **0.868** | **0.840** |
-| **ConvNeXt-Base LoRA** | **1.45M** | **~10 min** | **9** | 0.855 | 0.870 | 0.865 | 0.791 |
-
-**Vs full FT:** LoRA matches full FT on the arena’s primary metric (**test bacc 0.865 vs 0.868**, −0.3 pt) with **~60× fewer trainable params** and **~2.6× less wall-clock**. Overall acc (−2.5 pt) and macro-F1 (−4.9 pt) lag — full FT still better when you care about precision on rare classes, not only per-class recall. Prefer `best.pt` (epoch 9). On this medium-sized medical set, LoRA is the better **accuracy-per-compute** default; full FT remains the ceiling for macro-F1.
+**Vs full FT:** LoRA matches full FT on the arena’s primary metric (**test bacc 0.865 vs 0.868**, −0.3 pt) with **~60× fewer trainable params** and **~2.6× less wall-clock**. Overall acc (−2.5 pt) and macro-F1 (−4.9 pt) lag — full FT still better when you care about precision on rare classes, not only per-class recall.
 
 ## Self-supervised ViT — DINOv3 (linear probe / MLP)
 
-**Why include it:** DINOv3 is a self-supervised ViT trained to produce strong general visual features **without** ImageNet class labels. On small / domain-shifted data, a **frozen** DINO backbone + tiny head often beats full fine-tuning a supervised CNN, because you keep the pretrained representation instead of overfitting it.
+DINOv3 is a self-supervised ViT trained to produce strong general visual features **without** ImageNet class labels. On small / domain-shifted data, a **frozen** DINO backbone + tiny head often beats full fine-tuning a supervised CNN, because you keep the pretrained representation instead of overfitting it.
 
 **Protocol:** freeze the backbone → extract the **CLS** token → train only a head with CE (+ class weights), early stop on val balanced accuracy. Same DermaMNIST@224 splits and ImageNet mean/std as the CNN runs.
 
@@ -342,11 +311,6 @@ hf auth login   # paste the token (huggingface-cli login is deprecated)
 # or: export HF_TOKEN=hf_...
 python train_dinov3_linear_derma.py --data dermamnist_224 --epochs 40 --batch-size 32 --eval-test
 ```
-
-If you already agreed on the website but still see `401`, you are not logged in locally — re-run `hf auth login`.
-
-`403` / “not in the authorized list” means the token **is** valid, but **this HF account has not been granted the gated repo**. Login cannot skip that. Open the model page **while logged into the same account as the token**, click **Agree and access repository** (or submit the access form), wait until the page says you have access, then rerun the script. Approval is often instant; if Meta reviews it, wait until the repo lists you as authorized.
-
 | Flag | Default | Notes |
 |------|---------|-------|
 | `--model-id` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Try `…/dinov3-vits16-pretrain-lvd1689m` for a smaller/faster backbone |
@@ -368,24 +332,9 @@ HF ids look like `facebook/dinov3-vitb16-pretrain-lvd1689m`, `…-vits16-…`, `
 
 Command: `--epochs 40 --batch-size 32 --eval-test` (`facebook/dinov3-vitb16-pretrain-lvd1689m`). Early stop at epoch **35**; best val balanced accuracy at epoch **25** (~8.0 min). Checkpoint: `runs/dinov3_linear_derma/best.pt`. Trainable **5,383 / 85.7M (0.0063%)** — head only.
 
-| Split | Acc | Balanced acc | Macro-F1 |
-|-------|----:|-------------:|---------:|
-| Val (best, epoch 25) | 0.771 | **0.782** | 0.677 |
-| Test | 0.780 | **0.781** | 0.694 |
+**Takeaways:** Frozen DINOv3 + linear is a clean, cheap SSL baseline, but on DermaMNIST it **lags ConvNeXt full FT / LoRA by ~8–9 pt test bacc** and ~10–15 pt macro-F1. That is expected: a single linear layer cannot adapt web/LVD features to dermatoscopy the way full/LoRA FT can. 
 
-Train loss **1.31 → ~0.45**. Val CE fell steadily through ~epoch 19, then plateaued (~0.62). Val bacc climbed to **0.782** at epoch 25 with the usual noise under class imbalance (acc and bacc often disagree). Val and test bacc are essentially identical — the linear head did not overfit the 1k val set.
-
-| Method | Trainable | Time | Best epoch | Val bacc | Test acc | Test bacc | Test macro-F1 |
-|--------|----------:|-----:|-----------:|---------:|---------:|----------:|--------------:|
-| ResNet50 full FT | ~26M | ~42 min | 27 | 0.827 | 0.881 | 0.792 | 0.794 |
-| ConvNeXt-Base full FT | ~88M | ~26 min | 24 | 0.861 | **0.895** | **0.868** | **0.840** |
-| ConvNeXt-Base LoRA | 1.45M | ~10 min | 9 | 0.855 | 0.870 | 0.865 | 0.791 |
-| DINOv3-B linear probe | 5.4k | ~8 min | 25 | 0.782 | 0.780 | 0.781 | 0.694 |
-| **DINOv3-B MLP head** | **397k** | **~9 min** | **32** | **0.820** | 0.858 | **0.805** | **0.779** |
-
-**Takeaways:** Frozen DINOv3 + linear is a clean, cheap SSL baseline, but on DermaMNIST it **lags ConvNeXt full FT / LoRA by ~8–9 pt test bacc** and ~10–15 pt macro-F1. That is expected: a single linear layer cannot adapt web/LVD features to dermatoscopy the way full/LoRA FT can. Prefer `best.pt` (epoch 25).
-
-**DINOv3 MLP head** — script: [`train_dinov3_mlp_derma.py`](train_dinov3_mlp_derma.py). Same frozen backbone and data protocol; head is `Linear(D→H) → GELU → Dropout → Linear(H→C)` (default `H=512`, dropout `0.2`). Uses the cached HF weights (no re-download if linear already ran). Compare against linear test **bacc 0.781**.
+**DINOv3 MLP head** — script: [`train_dinov3_mlp_derma.py`](train_dinov3_mlp_derma.py). Same frozen backbone and data protocol; head is `Linear(D→H) → GELU → Dropout → Linear(H→C)` (default `H=512`, dropout `0.2`). 
 
 ```bash
 conda activate torch
@@ -402,13 +351,6 @@ python train_dinov3_mlp_derma.py --data dermamnist_224 --epochs 40 --batch-size 
 ### Run analysis — `dinov3_mlp_derma`
 
 Command: `--epochs 40 --batch-size 32 --eval-test` (`mlp_hidden=512`, `dropout=0.2`). Ran all **40** epochs (no early stop); best val balanced accuracy at epoch **32** (~9.1 min). Checkpoint: `runs/dinov3_mlp_derma/best.pt`. Trainable **397k / 86.1M (0.46%)**.
-
-| Split | Acc | Balanced acc | Macro-F1 |
-|-------|----:|-------------:|---------:|
-| Val (best, epoch 32) | 0.855 | **0.820** | 0.784 |
-| Test | 0.858 | **0.805** | 0.779 |
-
-Train loss **1.18 → ~0.12**. Val CE bottomed mid-run (~0.62) then rose while train loss kept falling — mild head overfit; bacc still peaked at epoch 32. Val→test bacc drop is small (**−1.5 pt**).
 
 **Vs linear probe (same backbone):** MLP gains **+2.4 pt test bacc** (0.805 vs 0.781), **+7.8 pt test acc**, and **+8.5 pt macro-F1** (0.779 vs 0.694). Nonlinearity helps rare-class precision/recall, not only overall accuracy. Prefer `best.pt` (epoch 32), not epoch 40.
 
