@@ -160,7 +160,9 @@ Primary metric: **test balanced accuracy**. Full per-method write-ups are in the
 
 | Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
 |--------|----------:|---------:|---------:|----------:|--------------:|
-| ResNet50 | ~24M | 0.925 | 0.892 | **0.910** | 0.888 |
+| ResNet50 full FT | ~24M | 0.925 | 0.892 | 0.910 | 0.888 |
+| ConvNeXt-Base full FT | ~88M | **0.979** | **0.968** | **0.972** | **0.966** |
+| ConvNeXt-Base LoRA | 1.55M | 0.977 | 0.965 | 0.971 | 0.964 |
 
 ## ResNet50 — full fine-tune on DermaMNIST
 
@@ -216,6 +218,59 @@ Early stop at epoch **30**; best val balanced accuracy at epoch **20** (~1.7 min
 
 - With only **10 images/class**, ImageNet ResNet50 still reaches **~91% test bacc** on Flowers — natural-image fine-grained transfer is much easier than Derma’s dermatoscopy domain shift (Derma test bacc **0.792**). 
 - Training is fast (~2 min) because the train set is tiny (1020). Acc/bacc/macro-F1 stay close (balanced train/val). 
+
+## ConvNeXt - Full fine-tune on Oxford Flowers-102
+
+Same protocol as ResNet50 Flowers / ConvNeXt Derma — ImageNet-pretrained **ConvNeXt-Base**, differential LRs, class weights, early stop on val balanced accuracy. Head is `classifier[2]`. Script: [`train_convnext_base_flowers.py`](train_convnext_base_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py).
+
+```bash
+conda activate torch
+python train_convnext_base_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/convnext_base_flowers` | Writes `best.pt` + `history.json` |
+| `--lr-backbone` / `--lr-head` | `1e-4` / `1e-3` | Head = `classifier.*` |
+| `--batch-size` | `32` | Drop to `16` if GPU OOM |
+| `--eval-test` | off | Score the large official test split after training |
+
+Compare against ResNet50 Flowers test **bacc 0.910**.
+
+### Run analysis — `convnext_base_flowers`
+
+Early stop at epoch **35**; best val balanced accuracy at epoch **25** (~5.0 min). Checkpoint: `runs/convnext_base_flowers/best.pt`. Model **87.7M**.
+
+**Vs ResNet50 Flowers:** ConvNeXt wins clearly — **+6.2 pt test bacc** (0.972 vs 0.910), **+7.6 pt acc**, **+7.8 pt macro-F1**. Same 10-shot/class protocol; the modern CNN inductive bias helps a lot on this fine-grained natural-image set.
+
+## ConvNeXt - LoRA on Oxford Flowers-102
+
+Same LoRA recipe as Derma — freeze ConvNeXt-Base; wrap **Linear** layers in `features` with rank-`r` adapters; train adapters + full `classifier`. Depthwise 7×7 convs stay frozen. Script: [`train_convnext_base_lora_flowers.py`](train_convnext_base_lora_flowers.py). Defaults `r=8` / `α=16`. No `peft` package.
+
+```bash
+conda activate torch
+python train_convnext_base_lora_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/convnext_base_lora_flowers` | Writes `best.pt` + `history.json` |
+| `--lora-r` / `--lora-alpha` | `8` / `16` | Rank and scale |
+| `--lora-dropout` | `0.05` | Dropout on LoRA input |
+| `--lr-lora` / `--lr-head` | `1e-3` / `1e-3` | Adapters + classifier |
+| `--eval-test` | off | Score the large official test split after training |
+
+Compare against ConvNeXt Flowers full FT test **bacc 0.972**.
+
+### Run analysis — `convnext_base_lora_flowers`
+
+Early stop at epoch **30**; best val balanced accuracy at epoch **20** (~3.4 min). Checkpoint: `runs/convnext_base_lora_flowers/best.pt`. Trainable **1.55M / 89.1M (1.74%)**.
+
+**Vs ConvNeXt full FT:** Essentially tied on the primary metric — test bacc **0.971 vs 0.972** (−0.1 pt) with **~57× fewer** trainable params and less wall-clock (~3.4 vs ~5 min). Acc/macro-F1 also within ~0.5 pt. On Flowers, LoRA is the better **accuracy-per-compute** default; full FT remains the slight ceiling.
+
+**Vs ResNet50 full FT:** Still **+6.1 pt test bacc** (0.971 vs 0.910) despite training far fewer params than ResNet full FT.
 
 ## ConvNeXt - Full fine-tune on DermaMNIST
 Same protocol as ResNet50 — ImageNet-pretrained **ConvNeXt-Base**, differential LRs, class weights, early stop on val balanced accuracy. Script: [`train_convnext_base_derma.py`](train_convnext_base_derma.py).
