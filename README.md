@@ -169,6 +169,8 @@ Primary metric: **test balanced accuracy**. Full per-method write-ups are in the
 | ViT-B/16 LoRA | 0.82M | 0.932 | 0.917 | 0.933 | 0.917 |
 | Swin-B full FT | ~87M | 0.955 | 0.942 | 0.952 | 0.939 |
 | Swin-B LoRA | 1.11M | 0.957 | 0.943 | 0.952 | 0.941 |
+| OpenCLIP B/16 zero-shot | 0 | 0.779 | 0.759 | 0.768 | 0.728 |
+| OpenCLIP B/16 linear | 52k | 0.982 | 0.983 | 0.984 | 0.980 |
 
 ## ResNet50 — full fine-tune on DermaMNIST
 
@@ -470,6 +472,68 @@ Early stop at epoch **40**; best val balanced accuracy at epoch **30** (~4.5 min
 **Vs ConvNeXt LoRA:** Trails by **−1.9 pt test bacc** (0.952 vs 0.971) at similar PEFT budget.
 
 **Vs DINOv3 linear:** Still **−4.5 pt test bacc** — frozen SSL remains the Flowers leader.
+
+## OpenCLIP — zero-shot on Oxford Flowers-102
+
+Frozen image + text towers; no training images. Default OpenCLIP **`ViT-B-16` + `datacomp_xl_s13b_b90k`** (same as Derma). Uses CLIP preprocess (not ImageNet norms). Class names are the official English flower names; averages **4** natural-image templates (`a photo of a {class}, a type of flower.`, etc.). Script: [`zeroshot_clip_flowers.py`](zeroshot_clip_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py) and the zero-shot wrapper from [`zeroshot_clip_derma.py`](zeroshot_clip_derma.py). Needs `open_clip_torch`.
+
+```bash
+conda activate torch
+python zeroshot_clip_flowers.py --data 102flowers --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/clip_zeroshot_flowers` | Writes `zeroshot.pt` + `history.json` |
+| `--arch` / `--pretrained` | `ViT-B-16` / `datacomp_xl_s13b_b90k` | Try `openai` or `laion2b_s34b_b88k` |
+| `--eval-test` | off | Score the large official test split |
+
+Compare against DINOv3 linear Flowers test **bacc 0.997** (in-domain SSL probe) and Derma CLIP zero-shot **0.350** (domain mismatch). Flowers is natural photos — expect zero-shot to be much stronger than on Derma, but still below fine-tuned / probed SSL.
+
+### Run analysis — `clip_zeroshot_flowers`
+
+Command: `--eval-test` (OpenCLIP `ViT-B-16` / `datacomp_xl_s13b_b90k`, 4 flower templates). No training; ~0.1 min (weights already cached). Classifier: `runs/clip_zeroshot_flowers/zeroshot.pt` (text embeddings only). Reported **149.6M** is **image + text** towers (vision ~86M). Trainable **0**.
+
+- Val **bacc 0.779** / test **bacc 0.768**, acc **0.759**, macro-F1 **0.728** on 102 fine-grained classes with **zero** labeled Flowers images.
+
+**Vs Derma CLIP zero-shot:** Huge domain win — **+41.8 pt test bacc** (0.768 vs 0.350). Natural-image captions match flower photos; dermatoscopy did not.
+
+**Vs DINOv3 linear:** Far behind — **−22.9 pt test bacc** (0.768 vs 0.997). Zero-shot text prompts cannot match a labeled linear probe on strong SSL features, even in-domain.
+
+**Vs supervised FT (ResNet / ConvNeXt / Swin):** Trails all labeled methods (ResNet **0.910**, Swin **0.952**, ConvNeXt **0.972**). Useful as a no-labels baseline, not a competitive Flowers classifier.
+
+## OpenCLIP — linear probe on Oxford Flowers-102
+
+Frozen CLIP **image** encoder + linear head; text tower unused. Same protocol as DINOv3 linear / CLIP linear Derma (inverse-freq CE, early stop on val bacc). Default OpenCLIP **`ViT-B-16` + `datacomp_xl_s13b_b90k`**. Uses OpenCLIP train/eval preprocess (CLIP norms, not ImageNet). Checkpoint stores the **head only**. Script: [`train_clip_linear_flowers.py`](train_clip_linear_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py) and `build_model` from [`train_clip_linear_derma.py`](train_clip_linear_derma.py). Needs `open_clip_torch`.
+
+```bash
+conda activate torch
+python train_clip_linear_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/clip_linear_flowers` | Writes `best.pt` + `history.json` |
+| `--arch` / `--pretrained` | `ViT-B-16` / `datacomp_xl_s13b_b90k` | Same as zero-shot |
+| `--lr` | `1e-3` | Head only (backbone frozen) |
+| `--eval-test` | off | Score the large official test split after training |
+
+Compare against Flowers CLIP zero-shot test **bacc 0.768** and DINOv3 linear **0.997**. On Derma, linear recovered ~+37 pt over zero-shot but still trailed DINO; on Flowers expect a large jump over zero-shot and a fair frozen-probe match vs DINO.
+
+### Run analysis — `clip_linear_flowers`
+
+Early stop at epoch **27**; best val balanced accuracy at epoch **17** (~1.7 min). Checkpoint: `runs/clip_linear_flowers/best.pt` (head only). Trainable **52,326 / 149.7M (0.035%)**; frozen vision encoder **86.2M**.
+
+- Val bacc **0.767** after epoch 1 → **0.982** by epoch 17 — labeled head unlocks the image encoder quickly.
+- Test **bacc 0.984**, acc **0.983**, macro-F1 **0.980**.
+
+**Vs zero-shot (same backbone):** Huge jump — **+21.6 pt test bacc** (0.984 vs 0.768), **+22.4 pt acc**. The vision tower already carries fine-grained flower signal; text prompts were the bottleneck.
+
+**Vs DINOv3 linear (fair frozen-probe match):** Trails by **−1.3 pt test bacc** (0.984 vs 0.997) with a similar tiny head. DINO still leads, but CLIP linear is a strong second and beats every supervised full FT / LoRA on Flowers.
+
+**Vs ConvNeXt / Swin FT:** **+1.2 pt** vs ConvNeXt full FT (0.984 vs 0.972) and **+3.2 pt** vs Swin — frozen multimodal features + linear head beat ImageNet supervised FT on this set.
 
 ## ConvNeXt - Full fine-tune on DermaMNIST
 Same protocol as ResNet50 — ImageNet-pretrained **ConvNeXt-Base**, differential LRs, class weights, early stop on val balanced accuracy. Script: [`train_convnext_base_derma.py`](train_convnext_base_derma.py).
