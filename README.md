@@ -165,6 +165,8 @@ Primary metric: **test balanced accuracy**. Full per-method write-ups are in the
 | ConvNeXt-Base LoRA | 1.55M | 0.977 | 0.965 | 0.971 | 0.964 |
 | DINOv3 linear | 78k | **0.995** | **0.997** | **0.997** | **0.997** |
 | DINOv3 MLP | 446k | 0.995 | 0.996 | 0.997 | 0.996 |
+| ViT-B/16 full FT | ~86M | 0.950 | 0.932 | 0.946 | 0.931 |
+| ViT-B/16 LoRA | 0.82M | 0.932 | 0.917 | 0.933 | 0.917 |
 
 ## ResNet50 — full fine-tune on DermaMNIST
 
@@ -339,6 +341,61 @@ Early stop at epoch **13**; best val balanced accuracy at epoch **3** (~0.9 min)
 
 **Vs ConvNeXt:** Still **+2.5 pt test bacc** vs full FT / LoRA, same story as linear — frozen LVD DINO dominates supervised CNN FT on this set.
 
+## ViT-B/16 — full fine-tune on Oxford Flowers-102
+
+Same protocol as ViT Derma / ConvNeXt Flowers — ImageNet-pretrained **ViT-B/16** (torchvision `vit_b_16` + `IMAGENET1K_V1`), differential LRs, class weights, early stop on val balanced accuracy. Head is `heads.head`. Script: [`train_vit_b16_flowers.py`](train_vit_b16_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py) and `build_model` / `param_groups` from [`train_vit_b16_derma.py`](train_vit_b16_derma.py).
+
+```bash
+conda activate torch
+python train_vit_b16_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/vit_b16_flowers` | Writes `best.pt` + `history.json` |
+| `--lr-backbone` / `--lr-head` | `1e-4` / `1e-3` | Differential FT; head = `heads.*` |
+| `--eval-test` | off | Score the large official test split after training |
+
+Compare against ConvNeXt Flowers full FT test **bacc 0.972** and DINOv3 linear **0.997**.
+
+### Run analysis — `vit_b16_flowers`
+
+Early stop at epoch **31**; best val balanced accuracy at epoch **21** (~3.4 min). Checkpoint: `runs/vit_b16_flowers/best.pt`. Model **85.9M**.
+
+- Train loss collapses by epoch 4 (~0.04) while val bacc plateaus ~0.94–0.95 — classic ViT overfit on 10-shot/class.
+- Test **bacc 0.946**, acc **0.932**, macro-F1 **0.931**; val→test drop ~0.4 pt bacc (mild).
+
+**Vs ConvNeXt full FT:** Trails by **−2.6 pt test bacc** (0.946 vs 0.972) and ~3–4 pt acc/F1 — same lesson as Derma: supervised ViT full FT loses to ConvNeXt at matched capacity.
+
+**Vs ResNet50:** **+3.6 pt test bacc** (0.946 vs 0.910) — beats the smaller CNN, still not competitive with ConvNeXt or frozen DINO.
+
+**Vs DINOv3 linear:** Far behind — **−5.1 pt test bacc** (0.946 vs 0.997) despite training **~1,100× more** params. On Flowers, keep the SSL backbone frozen; full FT of ImageNet ViT is the wrong recipe.
+
+## ViT-B/16 — LoRA on Oxford Flowers-102
+
+Same LoRA recipe as Derma — freeze ViT-B/16; wrap encoder **MLP** `nn.Linear` layers with rank-`r` adapters; train adapters + full `heads` classifier. Attention stays frozen (torchvision fused QKV / functional `out_proj`). Defaults `r=8` / `α=16`. No `peft` package. Script: [`train_vit_b16_lora_flowers.py`](train_vit_b16_lora_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py) and LoRA helpers from [`train_vit_b16_lora_derma.py`](train_vit_b16_lora_derma.py).
+
+```bash
+conda activate torch
+python train_vit_b16_lora_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/vit_b16_lora_flowers` | Writes `best.pt` + `history.json` |
+| `--lora-r` / `--lora-alpha` | `8` / `16` | Rank and scale |
+| `--lora-dropout` | `0.05` | Dropout on LoRA input |
+| `--lr-lora` / `--lr-head` | `1e-3` / `1e-3` | Adapters + classifier |
+| `--eval-test` | off | Score the large official test split after training |
+
+Compare against ViT Flowers full FT test **bacc 0.946** and ConvNeXt LoRA **0.971**.
+
+### Run analysis — `vit_b16_lora_flowers`
+
+Early stop at epoch **21**; best val balanced accuracy at epoch **11** (~2.3 min). Checkpoint: `runs/vit_b16_lora_flowers/best.pt`. Trainable **0.82M / 86.6M (0.94%)** (24 MLP Linears wrapped; attention frozen).
+
 ## ConvNeXt - Full fine-tune on DermaMNIST
 Same protocol as ResNet50 — ImageNet-pretrained **ConvNeXt-Base**, differential LRs, class weights, early stop on val balanced accuracy. Script: [`train_convnext_base_derma.py`](train_convnext_base_derma.py).
 
@@ -461,7 +518,7 @@ Command: `--epochs 40 --batch-size 32 --eval-test` (`mlp_hidden=512`, `dropout=0
 
 ImageNet-supervised **ViT-B/16** (~87M) is the classic Transformer classification baseline. On small / imbalanced data it often **overfits more** than ConvNeXt (weaker inductive bias), which is why the arena table lists **Full vs LoRA** — full FT first, then LoRA as the PEFT comparison.
 
-**Full fine-tune on DermaMNIST:** Same protocol as ConvNeXt — torchvision `vit_b_16` + `IMAGENET1K_V1`, differential LRs, class weights, early stop on val balanced accuracy. Script: [`train_vit_b16_derma.py`](train_vit_b16_derma.py).
+**Full fine-tune** — Derma: [`train_vit_b16_derma.py`](train_vit_b16_derma.py); Flowers: [`train_vit_b16_flowers.py`](train_vit_b16_flowers.py). Same protocol as ConvNeXt — torchvision `vit_b_16` + `IMAGENET1K_V1`, differential LRs, class weights, early stop on val balanced accuracy.
 
 ```bash
 conda activate torch
@@ -480,7 +537,7 @@ Command: `--epochs 40 --batch-size 32 --eval-test`. Ran all **40** epochs (no ea
 
 **Takeaways:** Supervised ViT-B/16 full FT **underperforms ConvNeXt** on this set (**−7.0 pt test bacc** vs ConvNeXt full FT). Test bacc was roughly on par with frozen DINOv3 + MLP (0.798 vs 0.805) — plain ViT full FT overfits easily. 
 
-**LoRA fine-tune** — script: [`train_vit_b16_lora_derma.py`](train_vit_b16_lora_derma.py). Freezes ViT-B/16; wraps encoder **MLP** `nn.Linear` layers with rank-`r` adapters; trains those + the full `heads` classifier. Attention stays frozen: torchvision fuses QKV into `in_proj_weight`, and `MultiheadAttention` reads `out_proj.weight` via the fused functional path (wrapping `out_proj` raises `AttributeError`). Same `r=8` / `α=16` defaults as ConvNeXt LoRA. No `peft` package.
+**LoRA fine-tune** — Derma: [`train_vit_b16_lora_derma.py`](train_vit_b16_lora_derma.py); Flowers: [`train_vit_b16_lora_flowers.py`](train_vit_b16_lora_flowers.py). Freezes ViT-B/16; wraps encoder **MLP** `nn.Linear` layers with rank-`r` adapters; trains those + the full `heads` classifier. Attention stays frozen: torchvision fuses QKV into `in_proj_weight`, and `MultiheadAttention` reads `out_proj.weight` via the fused functional path (wrapping `out_proj` raises `AttributeError`). Same `r=8` / `α=16` defaults as ConvNeXt LoRA. No `peft` package.
 
 ```bash
 conda activate torch
