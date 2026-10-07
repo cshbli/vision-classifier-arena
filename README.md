@@ -160,9 +160,11 @@ Primary metric: **test balanced accuracy**. Full per-method write-ups are in the
 
 | Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
 |--------|----------:|---------:|---------:|----------:|--------------:|
-| ResNet50 full FT | ~24M | 0.925 | 0.892 | 0.910 | 0.888 |
-| ConvNeXt-Base full FT | ~88M | **0.979** | **0.968** | **0.972** | **0.966** |
+| ResNet50 | ~24M | 0.925 | 0.892 | 0.910 | 0.888 |
+| ConvNeXt-Base full FT | ~88M | 0.979 | 0.968 | 0.972 | 0.966 |
 | ConvNeXt-Base LoRA | 1.55M | 0.977 | 0.965 | 0.971 | 0.964 |
+| DINOv3 linear | 78k | **0.995** | **0.997** | **0.997** | **0.997** |
+| DINOv3 MLP | 446k | 0.995 | 0.996 | 0.997 | 0.996 |
 
 ## ResNet50 — full fine-tune on DermaMNIST
 
@@ -272,6 +274,71 @@ Early stop at epoch **30**; best val balanced accuracy at epoch **20** (~3.4 min
 
 **Vs ResNet50 full FT:** Still **+6.1 pt test bacc** (0.971 vs 0.910) despite training far fewer params than ResNet full FT.
 
+## DINOv3 — linear probe on Oxford Flowers-102
+
+Same frozen-backbone protocol as Derma — **DINOv3 ViT-B/16** ([`facebook/dinov3-vitb16-pretrain-lvd1689m`](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m)), train only `Linear(CLS → 102)`. ImageNet mean/std, inverse-freq CE, early stop on val balanced accuracy. Script: [`train_dinov3_linear_flowers.py`](train_dinov3_linear_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py) and the model wrapper from [`train_dinov3_linear_derma.py`](train_dinov3_linear_derma.py).
+
+Weights are **gated** on Hugging Face — one-time login + license accept (see [Self-supervised ViT — DINOv3](#self-supervised-vit--dinov3-linear-probe--mlp) below). Needs `transformers>=4.56`.
+
+```bash
+conda activate torch
+python train_dinov3_linear_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/dinov3_linear_flowers` | Writes `best.pt` + `history.json` |
+| `--model-id` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Try `…/dinov3-vits16-…` for a smaller/faster backbone |
+| `--lr` | `1e-3` | Head only (backbone frozen) |
+| `--eval-test` | off | Score the large official test split after training |
+
+Compare against ConvNeXt Flowers full FT / LoRA test **bacc ~0.97** and ResNet50 **0.910**.
+
+### Run analysis — `dinov3_linear_flowers`
+
+Early stop at epoch **20**; best val balanced accuracy at epoch **10** (~1.3 min). Checkpoint: `runs/dinov3_linear_flowers/best.pt`. Trainable **78,438 / 85.7M (0.0915%)** — head only.
+
+- Val bacc **0.967** after epoch 1 and **0.993** by epoch 2 — Flowers features are nearly linearly separable under LVD DINOv3.
+- Test **bacc / acc 0.997**, macro-F1 **0.997** on the large 6149-image split — essentially saturated.
+
+**Vs ConvNeXt full FT / LoRA:** Clear win — **+2.5 pt test bacc** (0.997 vs 0.972 / 0.971) with **~1,100× fewer** trainable params than full FT and ~4× less wall-clock than LoRA. On in-domain natural images, frozen SSL beats supervised CNN fine-tuning.
+
+**Vs Derma DINOv3 linear:** Opposite story — Derma test bacc **0.781** (lags ConvNeXt); Flowers **0.997** (leads). Domain match (web/LVD ↔ photos) vs dermatoscopy shift is the difference, not the linear-probe recipe.
+
+## DINOv3 — MLP head on Oxford Flowers-102
+
+Same frozen backbone as Flowers linear probe; head is `Linear(D→H) → GELU → Dropout → Linear(H→102)` (default `H=512`, dropout `0.2`). Script: [`train_dinov3_mlp_flowers.py`](train_dinov3_mlp_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py) and the model wrapper from [`train_dinov3_mlp_derma.py`](train_dinov3_mlp_derma.py).
+
+HF gated access + `transformers>=4.56` — same setup as [DINOv3 linear Flowers](#dinov3--linear-probe-on-oxford-flowers-102).
+
+```bash
+conda activate torch
+python train_dinov3_mlp_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/dinov3_mlp_flowers` | Writes `best.pt` + `history.json` |
+| `--model-id` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Same backbone as linear probe |
+| `--mlp-hidden` / `--dropout` | `512` / `0.2` | MLP width and dropout after GELU |
+| `--lr` | `1e-3` | Head only (backbone frozen) |
+| `--eval-test` | off | Score the large official test split after training |
+
+Compare against Flowers linear probe test **bacc 0.997**.
+
+### Run analysis — `dinov3_mlp_flowers`
+
+Early stop at epoch **13**; best val balanced accuracy at epoch **3** (~0.9 min). Checkpoint: `runs/dinov3_mlp_flowers/best.pt`. Trainable **446k / 86.1M (0.52%)** (`mlp_hidden=512`, `dropout=0.2`).
+
+- Val bacc **0.991** after epoch 1; best val **0.995** by epoch 3 — same ceiling as linear.
+- Test **bacc 0.997** (0.9965), acc **0.996**, macro-F1 **0.996** — within noise of linear.
+
+**Vs linear probe (same backbone):** No gain — test bacc **0.9965 vs 0.9971** (−0.06 pt), macro-F1 slightly lower, with **~5.7× more** trainable params. Prefer linear on Flowers; the extra nonlinearity only helped on Derma where features were not already linearly separable.
+
+**Vs ConvNeXt:** Still **+2.5 pt test bacc** vs full FT / LoRA, same story as linear — frozen LVD DINO dominates supervised CNN FT on this set.
+
 ## ConvNeXt - Full fine-tune on DermaMNIST
 Same protocol as ResNet50 — ImageNet-pretrained **ConvNeXt-Base**, differential LRs, class weights, early stop on val balanced accuracy. Script: [`train_convnext_base_derma.py`](train_convnext_base_derma.py).
 
@@ -329,7 +396,7 @@ DINOv3 is a self-supervised ViT trained to produce strong general visual feature
 
 Both keep DINO frozen. They differ only in head capacity — not in backbone training.
 
-**DINOv3 linear probe** — script: [`train_dinov3_linear_derma.py`](train_dinov3_linear_derma.py). Default backbone: [`facebook/dinov3-vitb16-pretrain-lvd1689m`](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m) (ViT-B/16). Needs Hugging Face Transformers (not in the base `torch` env until you install it):
+**DINOv3 linear probe** — Derma: [`train_dinov3_linear_derma.py`](train_dinov3_linear_derma.py); Flowers: [`train_dinov3_linear_flowers.py`](train_dinov3_linear_flowers.py). Default backbone: [`facebook/dinov3-vitb16-pretrain-lvd1689m`](https://huggingface.co/facebook/dinov3-vitb16-pretrain-lvd1689m) (ViT-B/16). Needs Hugging Face Transformers (not in the base `torch` env until you install it):
 
 DINOv3 weights on Hugging Face are **gated**. A bare `from_pretrained` without login fails with `401` / `GatedRepoError`. One-time setup:
 
@@ -368,7 +435,7 @@ Command: `--epochs 40 --batch-size 32 --eval-test` (`facebook/dinov3-vitb16-pret
 
 **Takeaways:** Frozen DINOv3 + linear is a clean, cheap SSL baseline, but on DermaMNIST it **lags ConvNeXt full FT / LoRA by ~8–9 pt test bacc** and ~10–15 pt macro-F1. That is expected: a single linear layer cannot adapt web/LVD features to dermatoscopy the way full/LoRA FT can. 
 
-**DINOv3 MLP head** — script: [`train_dinov3_mlp_derma.py`](train_dinov3_mlp_derma.py). Same frozen backbone and data protocol; head is `Linear(D→H) → GELU → Dropout → Linear(H→C)` (default `H=512`, dropout `0.2`). 
+**DINOv3 MLP head** — Derma: [`train_dinov3_mlp_derma.py`](train_dinov3_mlp_derma.py); Flowers: [`train_dinov3_mlp_flowers.py`](train_dinov3_mlp_flowers.py). Same frozen backbone and data protocol; head is `Linear(D→H) → GELU → Dropout → Linear(H→C)` (default `H=512`, dropout `0.2`). 
 
 ```bash
 conda activate torch
