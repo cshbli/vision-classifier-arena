@@ -167,6 +167,8 @@ Primary metric: **test balanced accuracy**. Full per-method write-ups are in the
 | DINOv3 MLP | 446k | 0.995 | 0.996 | 0.997 | 0.996 |
 | ViT-B/16 full FT | ~86M | 0.950 | 0.932 | 0.946 | 0.931 |
 | ViT-B/16 LoRA | 0.82M | 0.932 | 0.917 | 0.933 | 0.917 |
+| Swin-B full FT | ~87M | 0.955 | 0.942 | 0.952 | 0.939 |
+| Swin-B LoRA | 1.11M | 0.957 | 0.943 | 0.952 | 0.941 |
 
 ## ResNet50 — full fine-tune on DermaMNIST
 
@@ -396,6 +398,79 @@ Compare against ViT Flowers full FT test **bacc 0.946** and ConvNeXt LoRA **0.97
 
 Early stop at epoch **21**; best val balanced accuracy at epoch **11** (~2.3 min). Checkpoint: `runs/vit_b16_lora_flowers/best.pt`. Trainable **0.82M / 86.6M (0.94%)** (24 MLP Linears wrapped; attention frozen).
 
+- Val peaks early at **0.932** and does not climb toward full-FT’s **0.950**.
+- Test **bacc 0.933**, acc **0.917**, macro-F1 **0.917**.
+
+**Vs ViT full FT:** LoRA **loses** — **−1.3 pt test bacc** (0.933 vs 0.946), **−1.5 pt acc**, **−1.4 pt macro-F1**, despite **~105× fewer** trainable params and less wall-clock. Opposite of Derma (where LoRA was **+6.1 pt**). On in-domain Flowers, full backbone FT still helps ImageNet ViT; MLP-only adapters under-adapt.
+
+**Vs ConvNeXt LoRA:** Trails by **−3.8 pt test bacc** (0.933 vs 0.971) at similar PEFT budget — ConvNeXt remains the better supervised LoRA on this set.
+
+**Vs DINOv3 linear:** **−6.4 pt test bacc** with ~10× more trainable params — frozen SSL still dominates.
+
+## Swin-B — full fine-tune on Oxford Flowers-102
+
+Same protocol as Swin Derma / ViT Flowers — ImageNet-pretrained **Swin-B** (torchvision `swin_b` + `IMAGENET1K_V1`), differential LRs, class weights, early stop on val balanced accuracy. Head is `model.head` (`Linear(1024 → 102)`). Script: [`train_swin_b_flowers.py`](train_swin_b_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py) and `build_model` / `param_groups` from [`train_swin_b_derma.py`](train_swin_b_derma.py).
+
+```bash
+conda activate torch
+python train_swin_b_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/swin_b_flowers` | Writes `best.pt` + `history.json` |
+| `--lr-backbone` / `--lr-head` | `1e-4` / `1e-3` | Differential FT; head = `head.*` |
+| `--eval-test` | off | Score the large official test split after training |
+
+### Run analysis — `swin_b_flowers`
+
+Early stop at epoch **27**; best val balanced accuracy at epoch **17** (~3.1 min). Checkpoint: `runs/swin_b_flowers/best.pt`. Model **86.8M**.
+
+- Val climbs to **0.955** by epoch 17; train loss already tiny by epoch 5 — less plateaued than plain ViT.
+- Test **bacc 0.952**, acc **0.942**, macro-F1 **0.939**; val→test drop ~0.3 pt bacc.
+
+**Vs ViT full FT:** Modest win — **+0.6 pt test bacc** (0.952 vs 0.946), **+1.0 pt acc**, **+0.8 pt macro-F1**. Hierarchical / windowed bias helps a bit on 10-shot Flowers, but the gap is much smaller than on Derma (+6.1 pt).
+
+**Vs ConvNeXt full FT:** Trails by **−2.0 pt test bacc** (0.952 vs 0.972) and ~2–3 pt acc/F1 — ConvNeXt remains the stronger supervised full-FT CNN.
+
+**Vs DINOv3 linear:** Still far behind — **−4.5 pt test bacc** (0.952 vs 0.997). Best supervised Transformer full FT so far on Flowers, but frozen SSL stays the leader.
+
+## Swin-B — LoRA on Oxford Flowers-102
+
+Same LoRA recipe as Derma — freeze Swin-B; wrap **MLP** `nn.Linear` layers and **PatchMerging.reduction** with rank-`r` adapters; train adapters + full `head` classifier. Attention stays frozen (torchvision functional `qkv` / `proj` path). Defaults `r=8` / `α=16`. No `peft` package. Script: [`train_swin_b_lora_flowers.py`](train_swin_b_lora_flowers.py). Reuses the Flowers loader from [`train_resnet50_flowers.py`](train_resnet50_flowers.py) and LoRA helpers from [`train_swin_b_lora_derma.py`](train_swin_b_lora_derma.py).
+
+```bash
+conda activate torch
+python train_swin_b_lora_flowers.py --data 102flowers --epochs 40 --batch-size 32 --eval-test
+```
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `--data` | `102flowers` | Folder with `jpg/`, `imagelabels.mat`, `setid.mat` |
+| `--out` | `runs/swin_b_lora_flowers` | Writes `best.pt` + `history.json` |
+| `--lora-r` / `--lora-alpha` | `8` / `16` | Rank and scale |
+| `--lora-dropout` | `0.05` | Dropout on LoRA input |
+| `--lr-lora` / `--lr-head` | `1e-3` / `1e-3` | Adapters + classifier |
+| `--eval-test` | off | Score the large official test split after training |
+
+Compare against Swin Flowers full FT test **bacc 0.952**, ViT LoRA **0.933**, and ConvNeXt LoRA **0.971**. On Derma, Swin LoRA beat full FT; on Flowers full FT already ~0.95 — expect a tighter full-vs-LoRA gap.
+
+### Run analysis — `swin_b_lora_flowers`
+
+Early stop at epoch **40**; best val balanced accuracy at epoch **30** (~4.5 min). Checkpoint: `runs/swin_b_lora_flowers/best.pt`. Trainable **1.11M / 87.9M (1.26%)** (51 Linears wrapped; MLP + PatchMerging; attention frozen).
+
+- Val climbs steadily to **0.957** at epoch 30 (slightly above full FT’s **0.955**).
+- Test **bacc 0.952**, acc **0.943**, macro-F1 **0.941** — essentially tied with full FT.
+
+**Vs Swin full FT:** Match on primary metric — test bacc **0.9523 vs 0.9520** (+0.03 pt), with **~79× fewer** trainable params. Prefer LoRA for accuracy-per-compute; full FT is not needed for the ceiling here.
+
+**Vs ViT LoRA:** Clear win — **+1.9 pt test bacc** (0.952 vs 0.933). Hierarchical Swin + PatchMerging adapters transfer better than plain ViT MLP-only LoRA on Flowers.
+
+**Vs ConvNeXt LoRA:** Trails by **−1.9 pt test bacc** (0.952 vs 0.971) at similar PEFT budget.
+
+**Vs DINOv3 linear:** Still **−4.5 pt test bacc** — frozen SSL remains the Flowers leader.
+
 ## ConvNeXt - Full fine-tune on DermaMNIST
 Same protocol as ResNet50 — ImageNet-pretrained **ConvNeXt-Base**, differential LRs, class weights, early stop on val balanced accuracy. Script: [`train_convnext_base_derma.py`](train_convnext_base_derma.py).
 
@@ -565,7 +640,7 @@ Standard ViT uses non-overlapping square patches at a **single scale**. **Swin**
 
 **Why Swin-B (not Swin-T):** Arena mid-size slot is ~86–89M (ConvNeXt-Base, ViT-B/16, DINOv3-B). Torchvision **Swin-B** is ~88M; **Swin-T** is ~28M (Tiny class). Use **Swin-B** for fair comparison; Swin-T only as a cheaper ablation later.
 
-**Full fine-tune on DermaMNIST:** Same protocol as ConvNeXt / ViT — torchvision `swin_b` + `IMAGENET1K_V1`, differential LRs, class weights, early stop on val balanced accuracy. Classifier head is `model.head` (`Linear(1024 → num_classes)`). Script: [`train_swin_b_derma.py`](train_swin_b_derma.py).
+**Full fine-tune on DermaMNIST:** Same protocol as ConvNeXt / ViT — torchvision `swin_b` + `IMAGENET1K_V1`, differential LRs, class weights, early stop on val balanced accuracy. Classifier head is `model.head` (`Linear(1024 → num_classes)`). Script: [`train_swin_b_derma.py`](train_swin_b_derma.py). Flowers: [`train_swin_b_flowers.py`](train_swin_b_flowers.py).
 
 ```bash
 conda activate torch
