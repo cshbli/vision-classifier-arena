@@ -11,6 +11,55 @@ A benchmark suite comparing image classification performance across small, custo
 | Hierarchical ViT | Swin-B | 87.8M | ImageNet-1K (~1.28M images) | 1,000 classes | Full / LoRA Fine-Tuning | CNN–Transformer hybrid; more data-efficient than plain ViT. |
 | Multimodal | OpenCLIP ViT-B/16 (DataComp-XL) | 86.2M vision / 150M with text | DataComp-1B (~1.4B image–text pairs; ~13B samples seen) | — (captions, not a closed label set) | **Zero-shot** / Linear Probe | Zero training images (zero-shot); linear probe is a strong small-data SOTA with low compute. |
 
+## Benchmark results on DermaMNIST@224
+
+Primary metric: **test balanced accuracy**. Full per-method write-ups are in the sections below.
+
+| Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|---------:|---------:|----------:|--------------:|
+| [ResNet50](#resnet50--full-fine-tune-on-dermamnist) | ~26M | 0.827 | **0.881** | 0.792 | 0.794 |
+| [ConvNeXt Base full FT](#convnext---full-fine-tune-on-dermamnist) | ~88M | 0.861 | **0.895** | **0.868** | **0.840** |
+| [ConvNeXt Base LoRA](#convnext---lora-on-dermamnist) | 1.45M |  0.855 | **0.870** | **0.865** | 0.791 |
+| [DINOv3 linear](#self-supervised-vit--dinov3-linear-probe--mlp) | 5.4k | 0.782 | 0.780 | 0.781 | 0.694 |
+| [DINOv3 MLP](#run-analysis--dinov3_mlp_derma) | 397k | 0.820 | **0.858** | 0.805 | 0.779 |
+| [ViT-B/16 full FT](#supervised-vit--vit-b16-full-fine-tune) | ~86M | 0.823 | **0.846** | 0.798 | 0.797 |
+| [ViT-B/16 LoRA](#run-analysis--vit_b16_lora_derma) | 0.74M |0.838 | **0.881** | **0.859** | **0.849** |
+| [Swin-B full FT](#hierarchical-vit--swin-b-full-fine-tune) | ~87M | 0.845 | **0.830** | **0.859** | 0.776 |
+| [Swin-B LoRA](#run-analysis--swin_b_lora_derma) | 1.01M | 0.863 | **0.872** | **0.872** | **0.835** |
+| [OpenCLIP B/16 zero-shot](#b-zero-shot--linear-probe-clip-multimodal-models) | 0 | 0.311 | 0.255 | 0.350 | 0.198 |
+| [OpenCLIP B/16 linear](#run-analysis--clip_linear_derma) | 3.6k | 0.741 | 0.741 | 0.723 | 0.595 |
+
+## Benchmark results on Oxford Flowers-102
+
+Primary metric: **test balanced accuracy**. Full per-method write-ups are in the sections below.
+
+| Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
+|--------|----------:|---------:|---------:|----------:|--------------:|
+| [ResNet50](#resnet50---full-fine-tune-on-oxford-flowers-102) | ~24M | 0.925 | 0.892 | 0.910 | 0.888 |
+| [ConvNeXt-Base full FT](#convnext---full-fine-tune-on-oxford-flowers-102) | ~88M | 0.979 | 0.968 | 0.972 | 0.966 |
+| [ConvNeXt-Base LoRA](#convnext---lora-on-oxford-flowers-102) | 1.55M | 0.977 | 0.965 | 0.971 | 0.964 |
+| [DINOv3 linear](#dinov3--linear-probe-on-oxford-flowers-102) | 78k | **0.995** | **0.997** | **0.997** | **0.997** |
+| [DINOv3 MLP](#dinov3--mlp-head-on-oxford-flowers-102) | 446k | 0.995 | 0.996 | 0.997 | 0.996 |
+| [ViT-B/16 full FT](#vit-b16--full-fine-tune-on-oxford-flowers-102) | ~86M | 0.950 | 0.932 | 0.946 | 0.931 |
+| [ViT-B/16 LoRA](#vit-b16--lora-on-oxford-flowers-102) | 0.82M | 0.932 | 0.917 | 0.933 | 0.917 |
+| [Swin-B full FT](#swin-b--full-fine-tune-on-oxford-flowers-102) | ~87M | 0.955 | 0.942 | 0.952 | 0.939 |
+| [Swin-B LoRA](#swin-b--lora-on-oxford-flowers-102) | 1.11M | 0.957 | 0.943 | 0.952 | 0.941 |
+| [OpenCLIP B/16 zero-shot](#openclip--zero-shot-on-oxford-flowers-102) | 0 | 0.779 | 0.759 | 0.768 | 0.728 |
+| [OpenCLIP B/16 linear](#openclip--linear-probe-on-oxford-flowers-102) | 52k | 0.982 | 0.983 | 0.984 | 0.980 |
+
+## Cross-dataset takeaways
+
+Primary metric throughout: **test balanced accuracy**.
+
+- **Domain match beats architecture.** Flowers are natural, web-visible objects that ImageNet / LVD / CLIP already “know.” Most methods land in a tight high band (~0.91–1.00). Derma is dermatoscopy — a real domain shift — so scores drop and spread (~0.35–0.87).
+- **Frozen features almost solve Flowers; they don’t solve Derma.** DINOv3 linear tops Flowers (**0.997**) with a tiny head. On Derma the same recipe is mid-pack (**0.781** / MLP **0.805**) — you need to adapt the backbone (FT or LoRA).
+- **CLIP tells the same story.** Zero-shot is usable on Flowers (**0.768**) and near-useless on Derma (**0.350**). Linear probe is near-SOTA on Flowers (**0.984**) but trails DINO on Derma (**0.723**). Captions describe flowers; they don’t describe lesion types under a dermoscope.
+- **On Derma, adapt the backbone; LoRA is enough.** Best runs are Swin-B LoRA (**0.872**) and ConvNeXt full FT (**0.868**); ConvNeXt LoRA is essentially tied (**0.865**) at ~60× fewer trainable params. Plain ViT full FT overfits (**0.798**); ViT LoRA recovers (**0.859**).
+- **On Flowers, ranking flips.** Frozen DINO / CLIP linear win; full FT of ConvNeXt/Swin/ViT is strong but not necessary. ViT LoRA is slightly *worse* than full FT here (0.933 vs 0.946) — the opposite of Derma.
+- **Few-shot ≠ hardest.** Flowers has only ~10 train images/class but stays easy because of domain overlap. Derma has ~7k labeled images and 7 classes, yet is harder because of domain shift + imbalance.
+- **ResNet50 is a solid floor, not the ceiling** on either set (Derma **0.792**, Flowers **0.910**). Modern CNN / hierarchical ViT (and on Flowers, frozen SSL) pull ahead.
+- **Practical rule of thumb:** in-domain / natural images → try frozen DINO or CLIP linear first; medical / OOD → prefer ConvNeXt or Swin with LoRA (or full FT), and treat zero-shot CLIP as a negative control, not a candidate.
+
 ## Datasets
 
 Open, compact classification sets for small / fine-grained / domain-specific evaluation (no large-scale corpora).
@@ -135,42 +184,6 @@ Every class counts equally, so **nv** cannot hide weak df/vasc/mel.
 | **acc** | Overall % correct (skewed by majority class) |
 | **bacc** | Mean per-class recall (class-equal) |
 | **macro_f1** | Mean per-class F1 (class-equal; also penalizes false positives) |
-
-## Benchmark results on DermaMNIST@224
-
-Primary metric: **test balanced accuracy**. Full per-method write-ups are in the sections below.
-
-| Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
-|--------|----------:|---------:|---------:|----------:|--------------:|
-| ResNet50 | ~26M | 0.827 | **0.881** | 0.792 | 0.794 |
-| ConvNeXt Base full FT | ~88M | 0.861 | **0.895** | **0.868** | **0.840** |
-| ConvNeXt Base LoRA | 1.45M |  0.855 | **0.870** | **0.865** | 0.791 |
-| DINOv3 linear | 5.4k | 0.782 | 0.780 | 0.781 | 0.694 |
-| DINOv3 MLP | 397k | 0.820 | **0.858** | 0.805 | 0.779 |
-| ViT-B/16 full FT | ~86M | 0.823 | **0.846** | 0.798 | 0.797 |
-| ViT-B/16 LoRA | 0.74M |0.838 | **0.881** | **0.859** | **0.849** |
-| Swin-B full FT | ~87M | 0.845 | **0.830** | **0.859** | 0.776 |
-| Swin-B LoRA | 1.01M | 0.863 | **0.872** | **0.872** | **0.835** |
-| OpenCLIP B/16 zero-shot | 0 | 0.311 | 0.255 | 0.350 | 0.198 |
-| OpenCLIP B/16 linear | 3.6k | 0.741 | 0.741 | 0.723 | 0.595 |
-
-## Benchmark results on Oxford Flowers-102
-
-Primary metric: **test balanced accuracy**. Full per-method write-ups are in the sections below.
-
-| Method | Trainable | Val bacc | Test acc | Test bacc | Test macro-F1 |
-|--------|----------:|---------:|---------:|----------:|--------------:|
-| ResNet50 | ~24M | 0.925 | 0.892 | 0.910 | 0.888 |
-| ConvNeXt-Base full FT | ~88M | 0.979 | 0.968 | 0.972 | 0.966 |
-| ConvNeXt-Base LoRA | 1.55M | 0.977 | 0.965 | 0.971 | 0.964 |
-| DINOv3 linear | 78k | **0.995** | **0.997** | **0.997** | **0.997** |
-| DINOv3 MLP | 446k | 0.995 | 0.996 | 0.997 | 0.996 |
-| ViT-B/16 full FT | ~86M | 0.950 | 0.932 | 0.946 | 0.931 |
-| ViT-B/16 LoRA | 0.82M | 0.932 | 0.917 | 0.933 | 0.917 |
-| Swin-B full FT | ~87M | 0.955 | 0.942 | 0.952 | 0.939 |
-| Swin-B LoRA | 1.11M | 0.957 | 0.943 | 0.952 | 0.941 |
-| OpenCLIP B/16 zero-shot | 0 | 0.779 | 0.759 | 0.768 | 0.728 |
-| OpenCLIP B/16 linear | 52k | 0.982 | 0.983 | 0.984 | 0.980 |
 
 ## ResNet50 — full fine-tune on DermaMNIST
 
